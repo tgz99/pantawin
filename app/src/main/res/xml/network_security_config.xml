@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Scoped cleartext exception for the pre-certbot bring-up window only (the
+  nginx vhost serves plain HTTP before certbot adds the TLS server block —
+  see deploy/README.md step 3 vs step 4). Remove this domain-config entirely
+  once HTTPS is confirmed live for api.pantawin.gratisaja.com; everything
+  else in the app stays on the platform default (cleartext blocked).
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">api.pantawin.gratisaja.com</domain>
+    </domain-config>
+</network-security-config>

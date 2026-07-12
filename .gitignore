@@ -1,0 +1,40 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+**/build/
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Go
+server/pantawin-api
+server/pantawin-migrate
+*.exe
+*.test
+server/vendor/
+
+# Secrets — never commit
+.env
+*.env
+!*.env.example
+*.pem
+*.key
+deploy/.env
+app/secrets.properties
+!app/secrets.properties.example
+
+# SQLDelight generated code
+**/generated/
+
+# Paparazzi failure diffs are not committed (golden images are)
+**/out/failures/
+.claude/
+.idea/

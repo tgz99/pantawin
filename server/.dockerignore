@@ -1,0 +1,5 @@
+pantawin-api
+pantawin-migrate
+*.exe
+*.test
+.git
