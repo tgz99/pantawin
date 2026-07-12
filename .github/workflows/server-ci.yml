@@ -68,7 +68,7 @@ jobs:
           docker compose -f docker-compose.prod.yml --env-file .env up -d --build
       - name: wait for API health
         run: |
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl -sf http://127.0.0.1:8081/healthz; then exit 0; fi
             sleep 2
           done
