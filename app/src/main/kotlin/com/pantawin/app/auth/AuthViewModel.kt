@@ -30,4 +30,18 @@ class AuthViewModel(private val session: SessionManager) : ViewModel() {
             // Success flips SessionManager.isLoggedIn, which the nav host observes.
         }
     }
+
+    /** Completes Google sign-in with the ID token Credential Manager returned. */
+    fun loginWithGoogle(idToken: String) {
+        _state.value = LoginState(submitting = true)
+        viewModelScope.launch {
+            runCatching { session.loginWithGoogle(idToken) }
+                .onFailure { _state.value = LoginState(error = it.message ?: "Google sign-in failed") }
+        }
+    }
+
+    fun googleSignInFailed(message: String?) {
+        // User cancellation passes null — not an error worth showing.
+        _state.value = LoginState(error = message)
+    }
 }

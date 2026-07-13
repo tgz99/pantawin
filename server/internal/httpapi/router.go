@@ -49,6 +49,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Post("/register", authH.register)
 			r.Post("/login", authH.login)
 			r.Post("/refresh", authH.refresh)
+			r.Post("/google", authH.googleLogin)
 		})
 
 		// WebSocket handshake authenticates via header OR ?access_token=

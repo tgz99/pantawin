@@ -41,6 +41,9 @@ type Config struct {
 	FCMProjectID       string
 	FCMCredentialsFile string
 	FCMCredentialsJSON string
+	// GoogleClientID is the OAuth web client ID used as the required audience
+	// for Google sign-in ID tokens. Empty = Google sign-in dormant.
+	GoogleClientID string
 }
 
 func Load() (Config, error) {
@@ -62,6 +65,7 @@ func Load() (Config, error) {
 		FCMProjectID:       os.Getenv("FCM_PROJECT_ID"),
 		FCMCredentialsFile: os.Getenv("FCM_CREDENTIALS_FILE"),
 		FCMCredentialsJSON: os.Getenv("FCM_CREDENTIALS_JSON"),
+		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 	}
 
 	if redisDBStr := os.Getenv("REDIS_DB"); redisDBStr != "" {

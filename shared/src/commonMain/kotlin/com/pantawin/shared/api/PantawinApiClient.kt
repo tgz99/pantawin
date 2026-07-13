@@ -43,6 +43,9 @@ class PantawinApiClient(
     @Serializable
     private data class ChangePasswordRequest(val current_password: String, val new_password: String)
 
+    @Serializable
+    private data class GoogleLoginRequest(val id_token: String)
+
     // --- Auth ---
 
     suspend fun login(email: String, password: String): Tokens =
@@ -55,6 +58,13 @@ class PantawinApiClient(
         client.post("$baseUrl/v1/auth/register") {
             contentType(ContentType.Application.Json)
             setBody(LoginRequest(email, password))
+        }.requireSuccess().body()
+
+    /** Exchanges a Google ID token (from Credential Manager) for a session. */
+    suspend fun loginWithGoogle(idToken: String): Tokens =
+        client.post("$baseUrl/v1/auth/google") {
+            contentType(ContentType.Application.Json)
+            setBody(GoogleLoginRequest(idToken))
         }.requireSuccess().body()
 
     suspend fun refresh(refreshToken: String): Tokens =

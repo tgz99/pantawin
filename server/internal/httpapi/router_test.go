@@ -142,7 +142,15 @@ func newTestEnv(t *testing.T) *testEnv {
 	authRepo := auth.NewRepository(pool)
 	issuer := auth.NewTokenIssuer("test-secret", 15*time.Minute, 30*24*time.Hour)
 	refreshStore := auth.NewRefreshStore(pool)
-	authService := auth.NewService(authRepo, issuer, refreshStore, 30*24*time.Hour)
+	// Fake Google verifier: token "google-ok:<email>" verifies as that email.
+	fakeGoogle := func(ctx context.Context, raw string) (auth.GoogleIdentity, error) {
+		if email, ok := strings.CutPrefix(raw, "google-ok:"); ok {
+			return auth.GoogleIdentity{Email: email, Verified: true}, nil
+		}
+		return auth.GoogleIdentity{}, auth.ErrGoogleTokenInvalid
+	}
+	authService := auth.NewService(authRepo, issuer, refreshStore, 30*24*time.Hour).
+		WithGoogleVerifier(fakeGoogle)
 
 	monitorRepo := monitor.NewRepository(pool)
 
@@ -228,6 +236,65 @@ func (e *testEnv) do(t *testing.T, method, path, accessToken string, body any) *
 		t.Fatalf("%s %s failed: %v", method, path, err)
 	}
 	return resp
+}
+
+func TestGoogleLogin(t *testing.T) {
+	env := newTestEnv(t)
+
+	// Invalid token rejected.
+	resp := env.do(t, http.MethodPost, "/v1/auth/google", "", map[string]any{"id_token": "garbage"})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for bad google token, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// First google login creates the account and returns tokens.
+	resp = env.do(t, http.MethodPost, "/v1/auth/google", "", map[string]any{"id_token": "google-ok:g@pantawin.test"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for google login, got %d", resp.StatusCode)
+	}
+	var tk tokens
+	if err := json.NewDecoder(resp.Body).Decode(&tk); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if tk.AccessToken == "" {
+		t.Fatal("expected access token from google login")
+	}
+
+	// The session works like any other.
+	resp = env.do(t, http.MethodGet, "/v1/monitors", tk.AccessToken, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 listing monitors with google session, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Second login reuses the account (no duplicate user).
+	resp = env.do(t, http.MethodPost, "/v1/auth/google", "", map[string]any{"id_token": "google-ok:g@pantawin.test"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for repeat google login, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+	var count int
+	env.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM users WHERE email = 'g@pantawin.test'`).Scan(&count)
+	if count != 1 {
+		t.Fatalf("expected exactly 1 user after two google logins, got %d", count)
+	}
+
+	// A google login for an EXISTING password account links to it — same
+	// account, not a duplicate.
+	env.register(t, "linked@pantawin.test", "Correct-Horse-42-staple")
+	resp = env.do(t, http.MethodPost, "/v1/auth/google", "", map[string]any{"id_token": "google-ok:linked@pantawin.test"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for google login on existing account, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+	env.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM users WHERE email = 'linked@pantawin.test'`).Scan(&count)
+	if count != 1 {
+		t.Fatalf("expected 1 user for linked account, got %d", count)
+	}
 }
 
 func TestChangePasswordFlow(t *testing.T) {

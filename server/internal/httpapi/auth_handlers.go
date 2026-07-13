@@ -70,6 +70,39 @@ func (h *authHandlers) login(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tokensResponse{AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken})
 }
 
+type googleLoginRequest struct {
+	IDToken string `json:"id_token"`
+}
+
+// googleLogin exchanges a Google ID token (obtained by the app via
+// Credential Manager) for a Pantawin session.
+func (h *authHandlers) googleLogin(w http.ResponseWriter, r *http.Request) {
+	var req googleLoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.IDToken == "" {
+		writeError(w, http.StatusBadRequest, "id_token is required")
+		return
+	}
+
+	tokens, err := h.service.GoogleLogin(r.Context(), req.IDToken)
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrGoogleNotConfigured):
+			writeError(w, http.StatusNotImplemented, "google sign-in is not configured")
+		case errors.Is(err, auth.ErrGoogleTokenInvalid):
+			writeError(w, http.StatusUnauthorized, "invalid google id token")
+		default:
+			writeError(w, http.StatusInternalServerError, "failed to sign in with google")
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, tokensResponse{AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken})
+}
+
 type changePasswordRequest struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`

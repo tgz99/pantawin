@@ -19,6 +19,7 @@ type Service struct {
 	issuer          *TokenIssuer
 	refreshStore    *RefreshStore
 	refreshTokenTTL time.Duration
+	googleVerify    GoogleVerifier // nil = Google sign-in dormant
 }
 
 func NewService(repo *Repository, issuer *TokenIssuer, refreshStore *RefreshStore, refreshTTL time.Duration) *Service {

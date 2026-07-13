@@ -74,7 +74,13 @@ func run(logger *slog.Logger) error {
 
 	issuer := auth.NewTokenIssuer(cfg.JWTSecret, cfg.AccessTokenTTL, cfg.RefreshTokenTTL)
 	refreshStore := auth.NewRefreshStore(pool)
-	authService := auth.NewService(authRepo, issuer, refreshStore, cfg.RefreshTokenTTL)
+	authService := auth.NewService(authRepo, issuer, refreshStore, cfg.RefreshTokenTTL).
+		WithGoogleVerifier(auth.NewGoogleVerifier(cfg.GoogleClientID))
+	if cfg.GoogleClientID != "" {
+		logger.Info("google sign-in enabled")
+	} else {
+		logger.Info("google sign-in dormant (GOOGLE_CLIENT_ID not set)")
+	}
 
 	monitorRepo := monitor.NewRepository(pool)
 	adminUser, err := authRepo.GetUserByEmail(ctx, cfg.AdminEmail)

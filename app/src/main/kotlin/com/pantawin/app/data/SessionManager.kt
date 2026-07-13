@@ -33,6 +33,12 @@ class SessionManager(
         save(tokens.accessToken, tokens.refreshToken)
     }
 
+    /** Exchange a Google ID token for a session (server verifies it). */
+    suspend fun loginWithGoogle(idToken: String) {
+        val tokens = api.loginWithGoogle(idToken)
+        save(tokens.accessToken, tokens.refreshToken)
+    }
+
     suspend fun logout() {
         context.dataStore.edit { it.clear() }
     }

@@ -95,6 +95,11 @@ dependencies {
     // Coil loads monitor favicons (Google s2 favicon service) in the dashboard.
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
+    // Google sign-in via Credential Manager (dormant without a web client id
+    // in google-services.json — the button hides itself).
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services)
+    implementation(libs.googleid)
     debugImplementation(libs.compose.ui.tooling)
 
     testImplementation(libs.junit)
