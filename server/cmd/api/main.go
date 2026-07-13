@@ -135,6 +135,9 @@ func run(logger *slog.Logger) error {
 		logger,
 	)
 	go dispatcher.Run(ctx)
+	// Failed sends are re-attempted with bounded backoff (state in
+	// notification_log, so retries survive restarts).
+	go dispatcher.RunRetrier(ctx)
 
 	// M3: realtime WebSocket feed.
 	publisher := realtime.NewPublisher(redisClient)

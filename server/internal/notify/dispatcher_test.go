@@ -237,6 +237,119 @@ func TestDispatcher_PushAndEmailBothFireOnce(t *testing.T) {
 	}
 }
 
+// flakyChannel records sends like captureChannel but fails the first
+// failFirst of them, so tests can exercise the retry path.
+type flakyChannel struct {
+	captureChannel
+	failFirst int
+}
+
+func (f *flakyChannel) Send(ctx context.Context, e notify.IncidentEvent, t notify.ChannelTarget) error {
+	_ = f.captureChannel.Send(ctx, e, t)
+	f.mu.Lock()
+	n := len(f.sent)
+	f.mu.Unlock()
+	if n <= f.failFirst {
+		return fmt.Errorf("simulated transport failure %d", n)
+	}
+	return nil
+}
+
+// TestDispatcher_RetriesFailedSendsBounded covers the retry fast-follow: a
+// send that fails transiently is re-sent by RunRetrier until it succeeds
+// (email here: fails twice, lands on attempt 3), while a permanently dead
+// transport (push here) stops at maxSendAttempts=4 instead of retrying
+// forever. Attempts and outcome are asserted against the notification_log
+// ledger, which is what makes the retries restart-safe.
+func TestDispatcher_RetriesFailedSendsBounded(t *testing.T) {
+	ctx := context.Background()
+
+	pgHost, pgPort := startContainer(t, "postgres:16-alpine", "5432", map[string]string{
+		"POSTGRES_USER": "pantawin", "POSTGRES_PASSWORD": "pantawin", "POSTGRES_DB": "pantawin_test",
+	})
+	dsn := fmt.Sprintf("postgres://pantawin:pantawin@%s:%s/pantawin_test?sslmode=disable", pgHost, pgPort)
+	if err := pgdb.Migrate(dsn, "../../migrations"); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	rHost, rPort := startContainer(t, "redis:7-alpine", "6379", nil)
+	rdb := redis.NewClient(&redis.Options{Addr: fmt.Sprintf("%s:%s", rHost, rPort)})
+	defer rdb.Close()
+
+	var userID, monitorID, incidentID int64
+	if err := pool.QueryRow(ctx, `INSERT INTO users (email, password_hash) VALUES ('t@t.test','x') RETURNING id`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `INSERT INTO monitors (user_id, name, url, alert_channels) VALUES ($1,'m','https://example.com','{email,push}') RETURNING id`, userID).Scan(&monitorID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `INSERT INTO incidents (monitor_id, cause) VALUES ($1,'timeout') RETURNING id`, monitorID).Scan(&incidentID); err != nil {
+		t.Fatal(err)
+	}
+
+	email := &flakyChannel{captureChannel: captureChannel{name: "email"}, failFirst: 2}
+	push := &flakyChannel{captureChannel: captureChannel{name: "push"}, failFirst: 999} // never succeeds
+	dispatcher := notify.NewDispatcher(pool, rdb, []notify.AlertChannel{email, push},
+		func(ctx context.Context, mID int64) (notify.ChannelTarget, []string, error) {
+			return notify.ChannelTarget{Email: "t@t.test"}, []string{"email", "push"}, nil
+		}, slog.Default()).
+		// Shrink the cadence so the 1m/4m/16m production backoff becomes
+		// 50ms/200ms/800ms and the whole schedule fits in a test run.
+		WithRetryTuning(100*time.Millisecond, 50*time.Millisecond)
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go dispatcher.Run(runCtx)
+	go dispatcher.RunRetrier(runCtx)
+
+	downEvent := notify.IncidentEvent{
+		IncidentID: incidentID, MonitorID: monitorID, MonitorName: "m", MonitorURL: "https://example.com",
+		EventType: notify.EventDown, Cause: "timeout", At: time.Now(),
+	}
+	if err := dispatcher.Enqueue(ctx, downEvent); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	// Email: initial send + 2 retries, third send succeeds.
+	waitForCount(t, &email.captureChannel, notify.EventDown, 3)
+	var emailOK bool
+	var emailAttempts int
+	if err := pool.QueryRow(ctx, `SELECT ok, attempts FROM notification_log WHERE incident_id=$1 AND channel='email' AND event_type='DOWN'`,
+		incidentID).Scan(&emailOK, &emailAttempts); err != nil {
+		t.Fatalf("email ledger row: %v", err)
+	}
+	if !emailOK || emailAttempts != 3 {
+		t.Errorf("email: expected ok=true attempts=3, got ok=%v attempts=%d", emailOK, emailAttempts)
+	}
+
+	// Push: never succeeds — must stop at exactly maxSendAttempts (4) sends.
+	waitForCount(t, &push.captureChannel, notify.EventDown, 4)
+	// Several retry polls' worth of settle time to catch a 5th send.
+	time.Sleep(1 * time.Second)
+	if got := push.count(notify.EventDown); got != 4 {
+		t.Errorf("push: expected exactly 4 sends (attempt cap), got %d", got)
+	}
+	var pushOK bool
+	var pushAttempts int
+	if err := pool.QueryRow(ctx, `SELECT ok, attempts FROM notification_log WHERE incident_id=$1 AND channel='push' AND event_type='DOWN'`,
+		incidentID).Scan(&pushOK, &pushAttempts); err != nil {
+		t.Fatalf("push ledger row: %v", err)
+	}
+	if pushOK || pushAttempts != 4 {
+		t.Errorf("push: expected ok=false attempts=4, got ok=%v attempts=%d", pushOK, pushAttempts)
+	}
+
+	// Email must not have been re-sent while push was retrying.
+	if got := email.count(notify.EventDown); got != 3 {
+		t.Errorf("email: expected sends to stay at 3 after success, got %d", got)
+	}
+}
+
 func waitForCount(t *testing.T, c *captureChannel, et notify.EventType, want int) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
