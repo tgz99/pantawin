@@ -26,6 +26,8 @@ import com.pantawin.app.data.SessionManager
 import com.pantawin.app.data.SessionMonitorGateway
 import com.pantawin.app.monitors.AddMonitorScreen
 import com.pantawin.app.monitors.AddMonitorViewModel
+import com.pantawin.app.monitors.IncidentHistoryScreen
+import com.pantawin.app.monitors.IncidentHistoryViewModel
 import com.pantawin.app.monitors.MonitorDetailScreen
 import com.pantawin.app.monitors.MonitorDetailViewModel
 import com.pantawin.app.monitors.MonitorsScreen
@@ -41,8 +43,10 @@ private object Routes {
     const val Add = "add"
     const val ChangePassword = "change-password"
     const val Detail = "monitor/{id}"
+    const val Incidents = "monitor/{id}/incidents"
 
     fun detail(id: Long) = "monitor/$id"
+    fun incidents(id: Long) = "monitor/$id/incidents"
 }
 
 // savedStateHandle key: Add screen -> Monitors screen "a monitor was created".
@@ -123,6 +127,18 @@ fun PantawinNavHost(session: SessionManager) {
             val id = entry.arguments?.getLong("id") ?: return@composable
             val vm: MonitorDetailViewModel = viewModel(factory = factory { MonitorDetailViewModel(gateway, id) })
             MonitorDetailScreen(
+                viewModel = vm,
+                onBack = { navController.popBackStack() },
+                onViewIncidents = { navController.navigate(Routes.incidents(id)) },
+            )
+        }
+        composable(
+            route = Routes.Incidents,
+            arguments = listOf(navArgument("id") { type = NavType.LongType }),
+        ) { entry ->
+            val id = entry.arguments?.getLong("id") ?: return@composable
+            val vm: IncidentHistoryViewModel = viewModel(factory = factory { IncidentHistoryViewModel(gateway, id) })
+            IncidentHistoryScreen(
                 viewModel = vm,
                 onBack = { navController.popBackStack() },
             )

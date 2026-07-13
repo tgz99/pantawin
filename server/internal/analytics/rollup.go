@@ -23,8 +23,8 @@ func NewRollup(pool *pgxpool.Pool, logger *slog.Logger) *Rollup {
 
 const (
 	rollupInterval   = 5 * time.Minute
-	hourlyLookback   = 26 * time.Hour     // steady-state: current day + slack
-	dailyLookback    = 48 * time.Hour     // steady-state: yesterday + today
+	hourlyLookback   = 26 * time.Hour      // steady-state: current day + slack
+	dailyLookback    = 48 * time.Hour      // steady-state: yesterday + today
 	backfillLookback = 14 * 24 * time.Hour // first run: cover existing history
 )
 

@@ -31,6 +31,7 @@ import (
 	pgdb "github.com/tgz99/pantawin/server/internal/db"
 	"github.com/tgz99/pantawin/server/internal/device"
 	"github.com/tgz99/pantawin/server/internal/httpapi"
+	"github.com/tgz99/pantawin/server/internal/incident"
 	"github.com/tgz99/pantawin/server/internal/monitor"
 	"github.com/tgz99/pantawin/server/internal/realtime"
 	"github.com/tgz99/pantawin/server/internal/scheduler"
@@ -176,8 +177,9 @@ func newTestEnv(t *testing.T) *testEnv {
 		Guard:       guard,
 		Scheduler:   sched,
 		Realtime:    wsHandler,
-		Redis:       redisClient,
-		Rollup:      analytics.NewRollup(pool, slog.Default()),
+		Redis:        redisClient,
+		Rollup:       analytics.NewRollup(pool, slog.Default()),
+		IncidentRepo: incident.NewRepository(pool),
 	})
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
@@ -773,5 +775,111 @@ func TestAlertChannelsSettableAndValidated(t *testing.T) {
 	resp.Body.Close()
 	if len(def.AlertChannels) != 1 || def.AlertChannels[0] != "email" {
 		t.Errorf("expected default [email], got %v", def.AlertChannels)
+	}
+}
+
+// TestStatsAndIncidentsEndpoints covers the M5 API surface: month/year
+// periods, the tz parameter, and the incident history endpoint — including
+// the ownership boundary.
+func TestStatsAndIncidentsEndpoints(t *testing.T) {
+	env := newTestEnv(t)
+	tk := env.register(t, "m5@pantawin.test", "Correct-Horse-42-staple")
+
+	resp := env.do(t, http.MethodPost, "/v1/monitors", tk.AccessToken, map[string]any{
+		"name": "m5", "url": "https://example.com",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 from create, got %d", resp.StatusCode)
+	}
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	json.NewDecoder(resp.Body).Decode(&created)
+	resp.Body.Close()
+
+	// Seed one resolved and one ongoing incident directly.
+	var resolvedID int64
+	if err := env.pool.QueryRow(context.Background(), `
+		INSERT INTO incidents (monitor_id, started_at, resolved_at, cause)
+		VALUES ($1, now() - interval '2 hours', now() - interval '1 hour', 'timeout') RETURNING id
+	`, created.ID).Scan(&resolvedID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.pool.Exec(context.Background(), `
+		INSERT INTO incidents (monitor_id, started_at, cause)
+		VALUES ($1, now() - interval '10 minutes', 'http_500')
+	`, created.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// All four periods work; tz is echoed back.
+	for _, period := range []string{"day", "week", "month", "year"} {
+		resp := env.do(t, http.MethodGet,
+			fmt.Sprintf("/v1/monitors/%d/stats?period=%s&tz=Asia/Jakarta", created.ID, period),
+			tk.AccessToken, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("period=%s: expected 200, got %d", period, resp.StatusCode)
+		}
+		var stats struct {
+			Period string `json:"period"`
+			Tz     string `json:"tz"`
+		}
+		json.NewDecoder(resp.Body).Decode(&stats)
+		resp.Body.Close()
+		if stats.Period != period || stats.Tz != "Asia/Jakarta" {
+			t.Errorf("expected period=%s tz=Asia/Jakarta, got %+v", period, stats)
+		}
+	}
+
+	// Bad period and bad tz are 400s.
+	resp = env.do(t, http.MethodGet,
+		fmt.Sprintf("/v1/monitors/%d/stats?period=quarter", created.ID), tk.AccessToken, nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for bad period, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+	resp = env.do(t, http.MethodGet,
+		fmt.Sprintf("/v1/monitors/%d/stats?tz=Mars/Olympus", created.ID), tk.AccessToken, nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for bad tz, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Incident history: newest-first, ongoing has null duration.
+	resp = env.do(t, http.MethodGet,
+		fmt.Sprintf("/v1/monitors/%d/incidents", created.ID), tk.AccessToken, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from incidents, got %d", resp.StatusCode)
+	}
+	var history struct {
+		Incidents []struct {
+			ID         int64   `json:"id"`
+			ResolvedAt *string `json:"resolved_at"`
+			Cause      string  `json:"cause"`
+			DurationS  *int64  `json:"duration_s"`
+		} `json:"incidents"`
+	}
+	json.NewDecoder(resp.Body).Decode(&history)
+	resp.Body.Close()
+	if len(history.Incidents) != 2 {
+		t.Fatalf("expected 2 incidents, got %d", len(history.Incidents))
+	}
+	ongoing, resolved := history.Incidents[0], history.Incidents[1]
+	if ongoing.ResolvedAt != nil || ongoing.DurationS != nil || ongoing.Cause != "http_500" {
+		t.Errorf("ongoing incident should be first with null resolved/duration: %+v", ongoing)
+	}
+	if resolved.ID != resolvedID || resolved.DurationS == nil || *resolved.DurationS != 3600 {
+		t.Errorf("resolved incident wrong: %+v", resolved)
+	}
+
+	// Another user can see neither stats nor incidents.
+	other := env.register(t, "m5-other@pantawin.test", "Correct-Horse-42-staple")
+	for _, path := range []string{"stats", "incidents"} {
+		resp := env.do(t, http.MethodGet,
+			fmt.Sprintf("/v1/monitors/%d/%s", created.ID, path), other.AccessToken, nil)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("%s: expected 404 for other user, got %d", path, resp.StatusCode)
+		}
+		resp.Body.Close()
 	}
 }

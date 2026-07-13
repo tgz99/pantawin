@@ -11,21 +11,23 @@ import (
 	"github.com/tgz99/pantawin/server/internal/analytics"
 	"github.com/tgz99/pantawin/server/internal/auth"
 	"github.com/tgz99/pantawin/server/internal/device"
+	"github.com/tgz99/pantawin/server/internal/incident"
 	"github.com/tgz99/pantawin/server/internal/monitor"
 	"github.com/tgz99/pantawin/server/internal/realtime"
 	"github.com/tgz99/pantawin/server/internal/ssrf"
 )
 
 type RouterDeps struct {
-	AuthService *auth.Service
-	Issuer      *auth.TokenIssuer
-	MonitorRepo *monitor.Repository
-	DeviceRepo  *device.Repository
-	Guard       *ssrf.Guard
-	Scheduler   SchedulerControl
-	Realtime    *realtime.Handler
-	Redis       *redis.Client
-	Rollup      *analytics.Rollup
+	AuthService  *auth.Service
+	Issuer       *auth.TokenIssuer
+	MonitorRepo  *monitor.Repository
+	DeviceRepo   *device.Repository
+	Guard        *ssrf.Guard
+	Scheduler    SchedulerControl
+	Realtime     *realtime.Handler
+	Redis        *redis.Client
+	Rollup       *analytics.Rollup
+	IncidentRepo *incident.Repository
 }
 
 func NewRouter(deps RouterDeps) http.Handler {
@@ -44,6 +46,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 	monitorH := &monitorHandlers{repo: deps.MonitorRepo, guard: deps.Guard, sched: deps.Scheduler}
 	deviceH := &deviceHandlers{repo: deps.DeviceRepo}
 	statsH := &statsHandlers{repo: deps.MonitorRepo, rollup: deps.Rollup}
+	incidentH := &incidentHandlers{monitors: deps.MonitorRepo, incidents: deps.IncidentRepo}
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Route("/auth", func(r chi.Router) {
@@ -79,6 +82,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 				r.Post("/pause", monitorH.pauseMonitor)
 				r.Post("/resume", monitorH.resumeMonitor)
 				r.Get("/stats", statsH.getStats)
+				r.Get("/incidents", incidentH.listIncidents)
 			})
 
 			r.Post("/devices", deviceH.register)

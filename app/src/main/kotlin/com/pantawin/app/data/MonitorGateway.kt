@@ -1,5 +1,6 @@
 package com.pantawin.app.data
 
+import com.pantawin.shared.model.Incident
 import com.pantawin.shared.model.Monitor
 import com.pantawin.shared.model.MonitorInput
 import com.pantawin.shared.model.MonitorStats
@@ -17,7 +18,8 @@ interface MonitorGateway {
     suspend fun pause(id: Long)
     suspend fun resume(id: Long)
     suspend fun delete(id: Long)
-    suspend fun stats(id: Long, period: String): MonitorStats
+    suspend fun stats(id: Long, period: String, tz: String): MonitorStats
+    suspend fun incidents(id: Long): List<Incident>
 }
 
 class SessionMonitorGateway(private val session: SessionManager) : MonitorGateway {
@@ -26,5 +28,6 @@ class SessionMonitorGateway(private val session: SessionManager) : MonitorGatewa
     override suspend fun pause(id: Long) { session.authed { token -> session.api.pauseMonitor(token, id) } }
     override suspend fun resume(id: Long) { session.authed { token -> session.api.resumeMonitor(token, id) } }
     override suspend fun delete(id: Long) { session.authed { token -> session.api.deleteMonitor(token, id) } }
-    override suspend fun stats(id: Long, period: String) = session.authed { token -> session.api.getStats(token, id, period) }
+    override suspend fun stats(id: Long, period: String, tz: String) = session.authed { token -> session.api.getStats(token, id, period, tz) }
+    override suspend fun incidents(id: Long) = session.authed { token -> session.api.getIncidents(token, id).incidents }
 }

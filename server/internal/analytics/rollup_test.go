@@ -160,13 +160,23 @@ func TestRollupConsistency(t *testing.T) {
 		t.Errorf("daily: expected %.3f%% uptime, got %v", wantUp, dUp)
 	}
 
-	// Stats() agrees with the rollups it serves.
-	dayStats, err := r.Stats(ctx, monitorID, analytics.PeriodDay, day)
+	// Stats() agrees with the rollups it serves. Since M5 every bucket
+	// window is emitted (empty ones with nil up_pct), so a day is always 24.
+	dayStats, err := r.Stats(ctx, monitorID, analytics.PeriodDay, day, time.UTC)
 	if err != nil {
 		t.Fatalf("day stats: %v", err)
 	}
-	if len(dayStats.Buckets) != 3 {
-		t.Errorf("expected 3 hourly buckets, got %d", len(dayStats.Buckets))
+	if len(dayStats.Buckets) != 24 {
+		t.Errorf("expected 24 hourly buckets, got %d", len(dayStats.Buckets))
+	}
+	active := 0
+	for _, b := range dayStats.Buckets {
+		if b.Checks > 0 {
+			active++
+		}
+	}
+	if active != 3 {
+		t.Errorf("expected 3 hourly buckets with checks, got %d", active)
 	}
 	if dayStats.Checks != 180 || dayStats.DowntimeS != 900 {
 		t.Errorf("day stats: expected 180 checks / 900s down, got %d/%d", dayStats.Checks, dayStats.DowntimeS)
@@ -175,12 +185,21 @@ func TestRollupConsistency(t *testing.T) {
 		t.Errorf("day stats: expected %.3f%% uptime, got %v", wantUp, dayStats.UpPct)
 	}
 
-	weekStats, err := r.Stats(ctx, monitorID, analytics.PeriodWeek, day)
+	weekStats, err := r.Stats(ctx, monitorID, analytics.PeriodWeek, day, time.UTC)
 	if err != nil {
 		t.Fatalf("week stats: %v", err)
 	}
-	if len(weekStats.Buckets) != 1 {
-		t.Errorf("expected 1 daily bucket in week view, got %d", len(weekStats.Buckets))
+	if len(weekStats.Buckets) != 7 {
+		t.Errorf("expected 7 daily buckets in week view, got %d", len(weekStats.Buckets))
+	}
+	activeDays := 0
+	for _, b := range weekStats.Buckets {
+		if b.Checks > 0 {
+			activeDays++
+		}
+	}
+	if activeDays != 1 {
+		t.Errorf("expected 1 daily bucket with checks, got %d", activeDays)
 	}
 	if weekStats.Checks != dayStats.Checks || weekStats.DowntimeS != dayStats.DowntimeS {
 		t.Errorf("week stats disagree with day stats: %+v vs %+v", weekStats, dayStats)

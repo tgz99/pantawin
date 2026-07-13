@@ -1,6 +1,7 @@
 package com.pantawin.app.monitors
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,10 +23,14 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -57,8 +62,10 @@ import kotlin.math.roundToInt
 fun MonitorDetailScreen(
     viewModel: MonitorDetailViewModel,
     onBack: () -> Unit,
+    onViewIncidents: () -> Unit,
 ) {
     val state by viewModel.state.collectAsState()
+    var selectedIncident by rememberSaveable { mutableStateOf<Long?>(null) }
 
     Scaffold(
         topBar = {
@@ -110,8 +117,12 @@ fun MonitorDetailScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.padding(top = 16.dp),
                     ) {
-                        PeriodChip("Day", selected = state.period == "day") { viewModel.setPeriod("day") }
-                        PeriodChip("Week", selected = state.period == "week") { viewModel.setPeriod("week") }
+                        STATS_PERIODS.forEach { period ->
+                            PeriodChip(
+                                period.replaceFirstChar { it.uppercase() },
+                                selected = state.period == period,
+                            ) { viewModel.setPeriod(period) }
+                        }
                     }
 
                     ElevatedCard(
@@ -134,7 +145,7 @@ fun MonitorDetailScreen(
 
                     ElevatedCard(
                         shape = MaterialTheme.shapes.large,
-                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 24.dp),
+                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
                     ) {
                         Column(Modifier.padding(20.dp)) {
                             Text(
@@ -148,6 +159,49 @@ fun MonitorDetailScreen(
                             )
                         }
                     }
+
+                    // M5: incident history — the three latest inline, the
+                    // rest behind "View all".
+                    ElevatedCard(
+                        shape = MaterialTheme.shapes.large,
+                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 24.dp),
+                    ) {
+                        Column(Modifier.padding(vertical = 14.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 20.dp),
+                            ) {
+                                Text(
+                                    "Recent incidents",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                TextButton(onClick = onViewIncidents) { Text("View all") }
+                            }
+                            if (state.incidents.isEmpty()) {
+                                Text(
+                                    "No incidents recorded.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                                )
+                            } else {
+                                state.incidents.take(3).forEach { incident ->
+                                    IncidentRow(
+                                        incident = incident,
+                                        modifier = Modifier
+                                            .clickable { selectedIncident = incident.id }
+                                            .padding(horizontal = 20.dp, vertical = 8.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                state.incidents.firstOrNull { it.id == selectedIncident }?.let { incident ->
+                    IncidentDetailDialog(incident = incident, onDismiss = { selectedIncident = null })
                 }
             }
         }
@@ -320,13 +374,16 @@ private fun ResponseTimeChart(stats: MonitorStats, modifier: Modifier = Modifier
             drawCircle(palette.series, radius = 4.dp.toPx(), center = Offset(x(lastIdx), y(v)))
         }
 
-        // First/last time labels along the baseline.
-        val zone = ZoneId.systemDefault()
-        val fmt = if (stats.period == "day") {
-            DateTimeFormatter.ofPattern("HH:mm").withZone(zone)
-        } else {
-            DateTimeFormatter.ofPattern("d MMM").withZone(ZoneId.of("UTC"))
-        }
+        // First/last time labels along the baseline. Buckets are computed in
+        // the zone the app requested (M5), so labels render in that zone too.
+        val zone = runCatching { ZoneId.of(stats.tz) }.getOrDefault(ZoneId.systemDefault())
+        val fmt = DateTimeFormatter.ofPattern(
+            when (stats.period) {
+                "day" -> "HH:mm"
+                "year" -> "MMM"
+                else -> "d MMM"
+            },
+        ).withZone(zone)
         val firstLabel = textMeasurer.measure(fmt.format(Instant.parse(stats.buckets.first().ts)), labelStyle)
         drawText(firstLabel, topLeft = Offset(labelGutter, plotH + 4.dp.toPx()))
         val lastLabel = textMeasurer.measure(fmt.format(Instant.parse(stats.buckets.last().ts)), labelStyle)

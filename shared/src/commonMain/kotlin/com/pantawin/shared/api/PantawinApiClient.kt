@@ -1,5 +1,6 @@
 package com.pantawin.shared.api
 
+import com.pantawin.shared.model.IncidentList
 import com.pantawin.shared.model.Monitor
 import com.pantawin.shared.model.MonitorInput
 import com.pantawin.shared.model.MonitorStats
@@ -13,6 +14,7 @@ import io.ktor.client.request.header
 import io.ktor.client.request.patch
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.request.url
 import io.ktor.client.statement.HttpResponse
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
@@ -111,10 +113,19 @@ class PantawinApiClient(
         client.delete("$baseUrl/v1/monitors/$id") { bearer(accessToken) }.requireSuccess()
     }
 
-    // --- Stats (M4 analytics) ---
+    // --- Stats + incident history (M4/M5 analytics) ---
 
-    suspend fun getStats(accessToken: String, id: Long, period: String): MonitorStats =
-        client.get("$baseUrl/v1/monitors/$id/stats?period=$period") { bearer(accessToken) }
+    suspend fun getStats(accessToken: String, id: Long, period: String, tz: String = "UTC"): MonitorStats =
+        client.get("$baseUrl/v1/monitors/$id/stats") {
+            bearer(accessToken)
+            url {
+                parameters.append("period", period)
+                parameters.append("tz", tz)
+            }
+        }.requireSuccess().body()
+
+    suspend fun getIncidents(accessToken: String, id: Long, limit: Int = 50): IncidentList =
+        client.get("$baseUrl/v1/monitors/$id/incidents?limit=$limit") { bearer(accessToken) }
             .requireSuccess().body()
 
     suspend fun pauseMonitor(accessToken: String, id: Long): Monitor =

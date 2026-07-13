@@ -13,6 +13,9 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+	// M5: stats windows are computed in the viewer's IANA timezone; the
+	// embedded tzdata keeps LoadLocation working in the from-scratch image.
+	_ "time/tzdata"
 
 	"github.com/redis/go-redis/v9"
 
@@ -162,15 +165,16 @@ func run(logger *slog.Logger) error {
 	go sched.Run(ctx)
 
 	router := httpapi.NewRouter(httpapi.RouterDeps{
-		AuthService: authService,
-		Issuer:      issuer,
-		MonitorRepo: monitorRepo,
-		DeviceRepo:  deviceRepo,
-		Guard:       guard,
-		Scheduler:   sched,
-		Realtime:    wsHandler,
-		Redis:       redisClient,
-		Rollup:      rollup,
+		AuthService:  authService,
+		Issuer:       issuer,
+		MonitorRepo:  monitorRepo,
+		DeviceRepo:   deviceRepo,
+		Guard:        guard,
+		Scheduler:    sched,
+		Realtime:     wsHandler,
+		Redis:        redisClient,
+		Rollup:       rollup,
+		IncidentRepo: incidentRepo,
 	})
 
 	server := &http.Server{

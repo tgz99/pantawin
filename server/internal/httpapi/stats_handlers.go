@@ -14,8 +14,10 @@ type statsHandlers struct {
 	rollup *analytics.Rollup
 }
 
-// GET /v1/monitors/{id}/stats?period=day|week&date=YYYY-MM-DD (spec 4, M4).
-// date anchors the window (defaults to today, UTC).
+// GET /v1/monitors/{id}/stats?period=day|week|month|year&date=YYYY-MM-DD&tz=Area/City
+// (spec 4; M4 day/week, M5 month/year + timezone-correct bucketing).
+// tz is the IANA zone the windows are computed in (default UTC); date
+// anchors the window and is interpreted in that zone.
 func (h *statsHandlers) getStats(w http.ResponseWriter, r *http.Request) {
 	userID, _ := userIDFromContext(r.Context())
 	mh := &monitorHandlers{repo: h.repo}
@@ -34,16 +36,23 @@ func (h *statsHandlers) getStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	period := r.URL.Query().Get("period")
-	if period != analytics.PeriodDay && period != analytics.PeriodWeek {
-		if period != "" {
-			writeError(w, http.StatusBadRequest, "period must be day or week")
-			return
-		}
+	if period == "" {
 		period = analytics.PeriodDay
 	}
-	anchor := time.Now().UTC()
+
+	loc := time.UTC
+	if raw := r.URL.Query().Get("tz"); raw != "" {
+		parsed, err := time.LoadLocation(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "tz must be a valid IANA timezone name")
+			return
+		}
+		loc = parsed
+	}
+
+	anchor := time.Now().In(loc)
 	if raw := r.URL.Query().Get("date"); raw != "" {
-		parsed, err := time.Parse("2006-01-02", raw)
+		parsed, err := time.ParseInLocation("2006-01-02", raw, loc)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "date must be YYYY-MM-DD")
 			return
@@ -51,8 +60,12 @@ func (h *statsHandlers) getStats(w http.ResponseWriter, r *http.Request) {
 		anchor = parsed
 	}
 
-	res, err := h.rollup.Stats(r.Context(), id, period, anchor)
+	res, err := h.rollup.Stats(r.Context(), id, period, anchor, loc)
 	if err != nil {
+		if errors.Is(err, analytics.ErrBadPeriod) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to compute stats")
 		return
 	}
