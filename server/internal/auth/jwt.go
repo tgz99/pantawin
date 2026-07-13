@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -46,8 +48,17 @@ func (t *TokenIssuer) IssueRefreshToken(userID int64) (string, error) {
 
 func (t *TokenIssuer) issue(userID int64, typ string, ttl time.Duration) (string, error) {
 	now := time.Now()
+	// A random jti guarantees every token string is unique even when two
+	// are minted in the same second with otherwise identical claims — the
+	// refresh-token hash is a UNIQUE column, so without this a rapid
+	// register->refresh would collide.
+	jti, err := randomID()
+	if err != nil {
+		return "", err
+	}
 	c := claims{
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        jti,
 			Subject:   fmt.Sprintf("%d", userID),
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
@@ -56,6 +67,14 @@ func (t *TokenIssuer) issue(userID int64, typ string, ttl time.Duration) (string
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, c)
 	return token.SignedString(t.secret)
+}
+
+func randomID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // ParseAccessToken validates signature, expiry, and that the token is

@@ -91,6 +91,27 @@ func (r *Repository) ListForUser(ctx context.Context, userID int64) ([]Monitor, 
 	return monitors, rows.Err()
 }
 
+// AlertConfig resolves how a monitor should be alerted: its enabled channels
+// and the destination email (per-monitor override, else the owner's account
+// email). Used by the notification dispatcher.
+func (r *Repository) AlertConfig(ctx context.Context, monitorID int64) (channels []string, email string, err error) {
+	var override *string
+	var ownerEmail string
+	err = r.pool.QueryRow(ctx, `
+		SELECT m.alert_channels, m.alert_email, u.email
+		FROM monitors m JOIN users u ON u.id = m.user_id
+		WHERE m.id = $1
+	`, monitorID).Scan(&channels, &override, &ownerEmail)
+	if err != nil {
+		return nil, "", fmt.Errorf("load alert config: %w", err)
+	}
+	email = ownerEmail
+	if override != nil && *override != "" {
+		email = *override
+	}
+	return channels, email, nil
+}
+
 func (r *Repository) GetByID(ctx context.Context, id int64) (Monitor, error) {
 	var m Monitor
 	err := r.pool.QueryRow(ctx, `
@@ -138,15 +159,33 @@ func (r *Repository) ListAll(ctx context.Context) ([]Monitor, error) {
 	return monitors, rows.Err()
 }
 
-// RecordCheck writes the raw result and applies the M0 trivial status rule
-// (ok -> UP, !ok -> DOWN). Replaced by the failure_threshold state machine
-// in M1.
-func (r *Repository) RecordCheck(ctx context.Context, monitorID int64, result checker.Result) error {
+// CheckOutcome reports what a recorded check did to the monitor's state —
+// M2's incident/notification pipeline keys off Transitioned.
+type CheckOutcome struct {
+	Transitioned bool
+	From, To     Status
+}
+
+// RecordCheck writes the raw result and advances the failure-threshold
+// state machine (spec 3.2) in one transaction. The monitor row is locked
+// (FOR UPDATE) so concurrent checks of the same monitor can't interleave
+// their read-modify-write of the failure counter.
+func (r *Repository) RecordCheck(ctx context.Context, monitorID int64, result checker.Result) (CheckOutcome, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
+		return CheckOutcome{}, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	var current Status
+	var consecutiveFailures, failureThreshold int
+	if err := tx.QueryRow(ctx, `
+		SELECT status, consecutive_failures, failure_threshold
+		FROM monitors WHERE id = $1
+		FOR UPDATE
+	`, monitorID).Scan(&current, &consecutiveFailures, &failureThreshold); err != nil {
+		return CheckOutcome{}, fmt.Errorf("lock monitor row: %w", err)
+	}
 
 	var httpCode, responseTimeMS *int
 	if result.HTTPCode != 0 {
@@ -166,20 +205,20 @@ func (r *Repository) RecordCheck(ctx context.Context, monitorID int64, result ch
 		INSERT INTO check_results (monitor_id, ok, http_code, response_time_ms, error_type)
 		VALUES ($1, $2, $3, $4, $5)
 	`, monitorID, result.OK, httpCode, responseTimeMS, errorType); err != nil {
-		return fmt.Errorf("insert check_result: %w", err)
+		return CheckOutcome{}, fmt.Errorf("insert check_result: %w", err)
 	}
 
-	newStatus := StatusDown
-	if result.OK {
-		newStatus = StatusUp
-	}
+	next, transitioned := Apply(current, consecutiveFailures, result.OK, failureThreshold)
 	if _, err := tx.Exec(ctx, `
-		UPDATE monitors SET status = $1 WHERE id = $2
-	`, newStatus, monitorID); err != nil {
-		return fmt.Errorf("update monitor status: %w", err)
+		UPDATE monitors SET status = $1, consecutive_failures = $2 WHERE id = $3
+	`, next.Status, next.ConsecutiveFailures, monitorID); err != nil {
+		return CheckOutcome{}, fmt.Errorf("update monitor status: %w", err)
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return CheckOutcome{}, err
+	}
+	return CheckOutcome{Transitioned: transitioned, From: current, To: next.Status}, nil
 }
 
 // StatusViews returns the API-facing view for each of the user's monitors,

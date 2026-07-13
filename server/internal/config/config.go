@@ -27,6 +27,13 @@ type Config struct {
 	SeedMonitorURL  string
 
 	CheckTimeout time.Duration
+
+	// M2 email alerts. SMTPAddr points at the local Postfix relay; AlertFrom
+	// is the sending address on the pantawin.gratisaja.com subdomain.
+	SMTPAddr  string
+	AlertFrom string
+	// DeepLinkBase builds the pantawin://monitor/{id} link in emails.
+	DeepLinkBase string
 }
 
 func Load() (Config, error) {
@@ -42,6 +49,9 @@ func Load() (Config, error) {
 		SeedMonitorName: getEnv("SEED_MONITOR_NAME", "gratisaja.com"),
 		SeedMonitorURL:  getEnv("SEED_MONITOR_URL", "https://gratisaja.com"),
 		CheckTimeout:    10 * time.Second,
+		SMTPAddr:        getEnv("SMTP_ADDR", "127.0.0.1:25"),
+		AlertFrom:       getEnv("ALERT_FROM", "alerts@pantawin.gratisaja.com"),
+		DeepLinkBase:    getEnv("DEEP_LINK_BASE", "pantawin://monitor/"),
 	}
 
 	if redisDBStr := os.Getenv("REDIS_DB"); redisDBStr != "" {

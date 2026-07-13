@@ -1,40 +1,71 @@
 // Package scheduler drives the check loop off a Redis sorted set keyed by
-// next-run epoch (spec section 3.2). Standing up the real queue at M0 —
-// even with a single monitor — avoids reworking the scheduling algorithm
-// when M1 introduces multiple monitors with independent intervals; a slow
-// monitor's check will never block another's, since each monitor's next
-// run is independent state in the sorted set rather than a shared loop.
+// next-run epoch (spec section 3.2). Each monitor's next run is independent
+// state in the sorted set, so a slow or timing-out monitor never delays
+// another's checks (spec 7.2 item 6).
 package scheduler
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/tgz99/pantawin/server/internal/checker"
 	"github.com/tgz99/pantawin/server/internal/monitor"
+	"github.com/tgz99/pantawin/server/internal/ssrf"
 )
 
 const scheduleKey = "pantawin:checks:schedule"
+
+// TransitionHook is invoked after a check causes a status transition
+// (UP->DOWN or DOWN->UP). M2's incident/notification dispatcher plugs in
+// here; at M1 it's a no-op.
+type TransitionHook func(ctx context.Context, m monitor.Monitor, outcome monitor.CheckOutcome, result checker.Result)
 
 type Scheduler struct {
 	redis        *redis.Client
 	repo         *monitor.Repository
 	checker      *checker.Checker
+	guard        *ssrf.Guard
+	onTransition TransitionHook
 	tickInterval time.Duration
 	logger       *slog.Logger
 }
 
-func New(redisClient *redis.Client, repo *monitor.Repository, chk *checker.Checker, logger *slog.Logger) *Scheduler {
+func New(redisClient *redis.Client, repo *monitor.Repository, chk *checker.Checker, guard *ssrf.Guard, logger *slog.Logger) *Scheduler {
 	return &Scheduler{
 		redis:        redisClient,
 		repo:         repo,
 		checker:      chk,
+		guard:        guard,
 		tickInterval: 1 * time.Second,
 		logger:       logger,
 	}
+}
+
+// SetTransitionHook installs the M2+ notification hook. Must be called
+// before Run.
+func (s *Scheduler) SetTransitionHook(hook TransitionHook) {
+	s.onTransition = hook
+}
+
+// Schedule (re)queues a monitor for its next check at now + delay. Called
+// on creation (delay 0 = check immediately), on resume, and internally
+// after every completed check.
+func (s *Scheduler) Schedule(ctx context.Context, monitorID int64, delay time.Duration) error {
+	return s.redis.ZAdd(ctx, scheduleKey, redis.Z{
+		Score:  float64(time.Now().Add(delay).Unix()),
+		Member: strconv.FormatInt(monitorID, 10),
+	}).Err()
+}
+
+// Unschedule removes a monitor from the queue — used by pause and delete.
+// (Defense in depth: processMonitor also drops paused/missing monitors.)
+func (s *Scheduler) Unschedule(ctx context.Context, monitorID int64) error {
+	return s.redis.ZRem(ctx, scheduleKey, strconv.FormatInt(monitorID, 10)).Err()
 }
 
 // EnsureScheduled seeds the Redis sorted set with every active (non-PAUSED)
@@ -91,7 +122,7 @@ func (s *Scheduler) tick(ctx context.Context) {
 	for _, member := range due {
 		// ZRem returns 0 if another process already claimed this member
 		// between the ZRangeByScore read and now — skip rather than
-		// double-check. Single-instance at M0, but this makes the queue
+		// double-check. Single-instance at M1, but this makes the queue
 		// safe to scale out later without a rework.
 		removed, err := s.redis.ZRem(ctx, scheduleKey, member).Result()
 		if err != nil {
@@ -115,28 +146,52 @@ func (s *Scheduler) processMonitor(ctx context.Context, monitorIDStr string) {
 
 	m, err := s.repo.GetByID(ctx, id)
 	if err != nil {
+		// Deleted monitors simply drop out of the schedule — not an error
+		// worth alerting on, just debug noise.
+		if strings.Contains(err.Error(), "no rows") {
+			s.logger.Debug("scheduler: monitor no longer exists, dropping", "monitor_id", id)
+			return
+		}
 		s.logger.Error("scheduler: failed to load monitor", "monitor_id", id, "error", err)
+		// Transient DB error: reschedule so the monitor isn't silently lost.
+		if rescheduleErr := s.Schedule(ctx, id, 30*time.Second); rescheduleErr != nil {
+			s.logger.Error("scheduler: failed to reschedule after load error", "monitor_id", id, "error", rescheduleErr)
+		}
 		return
 	}
 
 	if m.Status == monitor.StatusPaused {
-		return // dropped, not rescheduled — resuming re-adds it (M1)
+		return // dropped, not rescheduled — resume re-adds it
 	}
 
-	checkCtx, cancel := context.WithTimeout(ctx, time.Duration(m.TimeoutMS)*time.Millisecond)
-	defer cancel()
+	// Re-validate the target on EVERY check, not just at creation — this is
+	// the DNS-rebinding defense (spec 7.2 item 4). A monitor whose DNS now
+	// points somewhere forbidden records a failed check rather than probing
+	// internal infrastructure.
+	var result checker.Result
+	if err := s.guard.Validate(ctx, m.URL); err != nil {
+		if errors.Is(err, ssrf.ErrForbiddenTarget) {
+			s.logger.Warn("scheduler: monitor target now resolves to a forbidden address", "monitor_id", m.ID, "url", m.URL)
+			result = checker.Result{OK: false, ErrorType: checker.ErrorTypeDNS}
+		} else {
+			// Plain resolution failure — the checker would classify this
+			// as a DNS error anyway; record it as such without probing.
+			result = checker.Result{OK: false, ErrorType: checker.ErrorTypeDNS}
+		}
+	} else {
+		checkCtx, cancel := context.WithTimeout(ctx, time.Duration(m.TimeoutMS)*time.Millisecond)
+		result = s.checker.Check(checkCtx, m.Method, m.URL, m.ExpectedStatusMin, m.ExpectedStatusMax)
+		cancel()
+	}
 
-	result := s.checker.Check(checkCtx, m.Method, m.URL, m.ExpectedStatusMin, m.ExpectedStatusMax)
-
-	if err := s.repo.RecordCheck(ctx, m.ID, result); err != nil {
+	outcome, err := s.repo.RecordCheck(ctx, m.ID, result)
+	if err != nil {
 		s.logger.Error("scheduler: failed to record check result", "monitor_id", m.ID, "error", err)
+	} else if outcome.Transitioned && s.onTransition != nil {
+		s.onTransition(ctx, m, outcome, result)
 	}
 
-	nextRun := time.Now().Add(time.Duration(m.IntervalSeconds) * time.Second).Unix()
-	if err := s.redis.ZAdd(ctx, scheduleKey, redis.Z{
-		Score:  float64(nextRun),
-		Member: monitorIDStr,
-	}).Err(); err != nil {
+	if err := s.Schedule(ctx, m.ID, time.Duration(m.IntervalSeconds)*time.Second); err != nil {
 		s.logger.Error("scheduler: failed to reschedule monitor", "monitor_id", m.ID, "error", err)
 	}
 }

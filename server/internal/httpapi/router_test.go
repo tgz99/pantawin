@@ -7,9 +7,12 @@
 package httpapi_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -27,7 +30,7 @@ import (
 	"github.com/tgz99/pantawin/server/internal/httpapi"
 	"github.com/tgz99/pantawin/server/internal/monitor"
 	"github.com/tgz99/pantawin/server/internal/scheduler"
-	"log/slog"
+	"github.com/tgz99/pantawin/server/internal/ssrf"
 )
 
 func startPostgres(t *testing.T) string {
@@ -95,7 +98,25 @@ func startRedis(t *testing.T) string {
 	return fmt.Sprintf("%s:%s", host, port.Port())
 }
 
-func TestRegisterLoginAndListMonitors_EndToEnd(t *testing.T) {
+// allowLoopbackResolver lets integration tests point monitors at local
+// httptest servers, which the production SSRF guard would (correctly) block.
+type allowAllResolver struct{}
+
+func (allowAllResolver) LookupIP(ctx context.Context, host string) ([]net.IP, error) {
+	return []net.IP{net.ParseIP("93.184.216.34")}, nil
+}
+
+type testEnv struct {
+	server      *httptest.Server
+	pool        *pgxpool.Pool
+	redisClient *redis.Client
+	monitorRepo *monitor.Repository
+	sched       *scheduler.Scheduler
+	issuer      *auth.TokenIssuer
+}
+
+func newTestEnv(t *testing.T) *testEnv {
+	t.Helper()
 	ctx := context.Background()
 
 	dsn := startPostgres(t)
@@ -109,130 +130,348 @@ func TestRegisterLoginAndListMonitors_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to connect pool: %v", err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 
 	redisClient := redis.NewClient(&redis.Options{Addr: redisAddr})
-	defer redisClient.Close()
+	t.Cleanup(func() { _ = redisClient.Close() })
 
 	authRepo := auth.NewRepository(pool)
 	issuer := auth.NewTokenIssuer("test-secret", 15*time.Minute, 30*24*time.Hour)
-	authService := auth.NewService(authRepo, issuer)
+	refreshStore := auth.NewRefreshStore(pool)
+	authService := auth.NewService(authRepo, issuer, refreshStore, 30*24*time.Hour)
 
 	monitorRepo := monitor.NewRepository(pool)
 
-	router := httpapi.NewRouter(authService, issuer, monitorRepo)
-	server := httptest.NewServer(router)
-	defer server.Close()
+	// Guard with a permissive resolver + loopback allowance: URL-scheme and
+	// non-loopback range checks still run, but httptest targets (literal
+	// 127.0.0.1 URLs) are reachable. The real range checks have their own
+	// dedicated unit suite in internal/ssrf.
+	guard := ssrf.NewGuardWithResolver(allowAllResolver{})
+	guard.AllowLoopback = true
+	chk := checker.New(5 * time.Second)
+	sched := scheduler.New(redisClient, monitorRepo, chk, guard, slog.Default())
 
-	// 1. Register a new user.
-	registerBody := `{"email":"tester@pantawin.gratisaja.com","password":"correct horse battery staple"}`
-	resp, err := http.Post(server.URL+"/v1/auth/register", "application/json", strings.NewReader(registerBody))
+	router := httpapi.NewRouter(httpapi.RouterDeps{
+		AuthService: authService,
+		Issuer:      issuer,
+		MonitorRepo: monitorRepo,
+		Guard:       guard,
+		Scheduler:   sched,
+		Redis:       redisClient,
+	})
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+
+	return &testEnv{
+		server: server, pool: pool, redisClient: redisClient,
+		monitorRepo: monitorRepo, sched: sched, issuer: issuer,
+	}
+}
+
+type tokens struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+}
+
+func (e *testEnv) register(t *testing.T, email, password string) tokens {
+	t.Helper()
+	body := fmt.Sprintf(`{"email":%q,"password":%q}`, email, password)
+	resp, err := http.Post(e.server.URL+"/v1/auth/register", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("register request failed: %v", err)
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("expected 201 from register, got %d", resp.StatusCode)
 	}
-	var tokens struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&tokens); err != nil {
+	var tk tokens
+	if err := json.NewDecoder(resp.Body).Decode(&tk); err != nil {
 		t.Fatalf("failed to decode register response: %v", err)
 	}
-	resp.Body.Close()
-	if tokens.AccessToken == "" || tokens.RefreshToken == "" {
-		t.Fatal("expected non-empty access and refresh tokens from register")
-	}
+	return tk
+}
 
-	// 2. GET /v1/monitors with no monitors yet -> empty array, not null.
-	req, _ := http.NewRequest(http.MethodGet, server.URL+"/v1/monitors", nil)
-	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
-	resp, err = http.DefaultClient.Do(req)
+func (e *testEnv) do(t *testing.T, method, path, accessToken string, body any) *http.Response {
+	t.Helper()
+	var reader *bytes.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal request body: %v", err)
+		}
+		reader = bytes.NewReader(raw)
+	} else {
+		reader = bytes.NewReader(nil)
+	}
+	req, err := http.NewRequest(method, e.server.URL+path, reader)
 	if err != nil {
-		t.Fatalf("list monitors request failed: %v", err)
+		t.Fatalf("build request: %v", err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 from list monitors, got %d", resp.StatusCode)
+	if accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+accessToken)
 	}
-	var views []monitor.StatusView
-	if err := json.NewDecoder(resp.Body).Decode(&views); err != nil {
-		t.Fatalf("failed to decode list monitors response: %v", err)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
-	resp.Body.Close()
-	if len(views) != 0 {
-		t.Fatalf("expected 0 monitors before seeding, got %d", len(views))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s failed: %v", method, path, err)
 	}
+	return resp
+}
 
-	// 3. Seed a monitor pointed at a local httptest target and run one
-	// scheduler tick manually, then confirm it shows up as UP.
+func TestMonitorCRUDLifecycle(t *testing.T) {
+	env := newTestEnv(t)
+	tk := env.register(t, "crud@pantawin.test", "correct horse battery staple")
+
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer target.Close()
 
-	userID, err := issuer.ParseAccessToken(tokens.AccessToken)
-	if err != nil {
-		t.Fatalf("failed to parse access token: %v", err)
+	// Create
+	resp := env.do(t, http.MethodPost, "/v1/monitors", tk.AccessToken, map[string]any{
+		"name": "target", "url": target.URL, "interval_seconds": 30,
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 from create, got %d", resp.StatusCode)
 	}
-	seeded, err := monitorRepo.SeedMonitor(ctx, userID, "test target", target.URL)
-	if err != nil {
-		t.Fatalf("failed to seed monitor: %v", err)
+	var created struct {
+		ID     int64  `json:"id"`
+		Status string `json:"status"`
 	}
+	json.NewDecoder(resp.Body).Decode(&created)
+	resp.Body.Close()
+	if created.Status != "PENDING" {
+		t.Errorf("new monitor should be PENDING, got %s", created.Status)
+	}
+
+	// Read
+	resp = env.do(t, http.MethodGet, fmt.Sprintf("/v1/monitors/%d", created.ID), tk.AccessToken, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from get, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Update
+	resp = env.do(t, http.MethodPatch, fmt.Sprintf("/v1/monitors/%d", created.ID), tk.AccessToken, map[string]any{
+		"name": "renamed", "failure_threshold": 3,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from patch, got %d", resp.StatusCode)
+	}
+	var updated struct {
+		Name             string `json:"name"`
+		FailureThreshold int    `json:"failure_threshold"`
+	}
+	json.NewDecoder(resp.Body).Decode(&updated)
+	resp.Body.Close()
+	if updated.Name != "renamed" || updated.FailureThreshold != 3 {
+		t.Errorf("patch not applied: %+v", updated)
+	}
+
+	// Pause / resume
+	resp = env.do(t, http.MethodPost, fmt.Sprintf("/v1/monitors/%d/pause", created.ID), tk.AccessToken, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from pause, got %d", resp.StatusCode)
+	}
+	var paused struct {
+		Status string `json:"status"`
+	}
+	json.NewDecoder(resp.Body).Decode(&paused)
+	resp.Body.Close()
+	if paused.Status != "PAUSED" {
+		t.Errorf("expected PAUSED after pause, got %s", paused.Status)
+	}
+
+	resp = env.do(t, http.MethodPost, fmt.Sprintf("/v1/monitors/%d/resume", created.ID), tk.AccessToken, nil)
+	var resumed struct {
+		Status string `json:"status"`
+	}
+	json.NewDecoder(resp.Body).Decode(&resumed)
+	resp.Body.Close()
+	if resumed.Status != "PENDING" {
+		t.Errorf("resume should force a fresh PENDING confirmation cycle, got %s", resumed.Status)
+	}
+
+	// Delete
+	resp = env.do(t, http.MethodDelete, fmt.Sprintf("/v1/monitors/%d", created.ID), tk.AccessToken, nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204 from delete, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = env.do(t, http.MethodGet, fmt.Sprintf("/v1/monitors/%d", created.ID), tk.AccessToken, nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404 after delete, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+func TestMonitorValidation(t *testing.T) {
+	env := newTestEnv(t)
+	tk := env.register(t, "validation@pantawin.test", "correct horse battery staple")
+
+	cases := []struct {
+		name string
+		body map[string]any
+	}{
+		{"missing url", map[string]any{"name": "x"}},
+		{"bad scheme", map[string]any{"url": "ftp://example.com"}},
+		{"interval too low", map[string]any{"url": "https://example.com", "interval_seconds": 5}},
+		{"bad method", map[string]any{"url": "https://example.com", "method": "DELETE"}},
+		{"threshold zero", map[string]any{"url": "https://example.com", "failure_threshold": 0}},
+	}
+	for _, tc := range cases {
+		resp := env.do(t, http.MethodPost, "/v1/monitors", tk.AccessToken, tc.body)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: expected 400, got %d", tc.name, resp.StatusCode)
+		}
+		resp.Body.Close()
+	}
+}
+
+func TestMonitorOwnershipIsolation(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.register(t, "alice@pantawin.test", "correct horse battery staple")
+	bob := env.register(t, "bob@pantawin.test", "correct horse battery staple")
+
+	resp := env.do(t, http.MethodPost, "/v1/monitors", alice.AccessToken, map[string]any{
+		"url": "https://example.com",
+	})
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	json.NewDecoder(resp.Body).Decode(&created)
+	resp.Body.Close()
+
+	// Bob cannot see, edit, or delete Alice's monitor.
+	for _, probe := range []struct {
+		method, path string
+	}{
+		{http.MethodGet, fmt.Sprintf("/v1/monitors/%d", created.ID)},
+		{http.MethodDelete, fmt.Sprintf("/v1/monitors/%d", created.ID)},
+		{http.MethodPost, fmt.Sprintf("/v1/monitors/%d/pause", created.ID)},
+	} {
+		resp := env.do(t, probe.method, probe.path, bob.AccessToken, nil)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("%s %s as non-owner: expected 404, got %d", probe.method, probe.path, resp.StatusCode)
+		}
+		resp.Body.Close()
+	}
+}
+
+func TestRefreshRotation(t *testing.T) {
+	env := newTestEnv(t)
+	tk := env.register(t, "rotate@pantawin.test", "correct horse battery staple")
+
+	// First refresh succeeds and yields new tokens.
+	resp := env.do(t, http.MethodPost, "/v1/auth/refresh", "", map[string]any{
+		"refresh_token": tk.RefreshToken,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("first refresh: expected 200, got %d", resp.StatusCode)
+	}
+	var rotated tokens
+	json.NewDecoder(resp.Body).Decode(&rotated)
+	resp.Body.Close()
+	if rotated.RefreshToken == tk.RefreshToken {
+		t.Error("refresh should rotate the refresh token, got the same one back")
+	}
+
+	// Replaying the consumed token must fail.
+	resp = env.do(t, http.MethodPost, "/v1/auth/refresh", "", map[string]any{
+		"refresh_token": tk.RefreshToken,
+	})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("replayed refresh token: expected 401, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// The rotated token still works.
+	resp = env.do(t, http.MethodPost, "/v1/auth/refresh", "", map[string]any{
+		"refresh_token": rotated.RefreshToken,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("rotated refresh token: expected 200, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+// End-to-end state machine: a monitor with failure_threshold 2 pointed at a
+// target that starts failing goes DOWN only after the second consecutive
+// failed check, and recovers on the first success (spec 7.2 item 1, at the
+// integration level — the exhaustive cases live in the statemachine unit
+// suite).
+func TestStateMachineEndToEnd(t *testing.T) {
+	env := newTestEnv(t)
+	tk := env.register(t, "sm@pantawin.test", "correct horse battery staple")
+	ctx := context.Background()
+
+	healthy := true
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if healthy {
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer target.Close()
+
+	resp := env.do(t, http.MethodPost, "/v1/monitors", tk.AccessToken, map[string]any{
+		"url": target.URL, "failure_threshold": 2,
+	})
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	json.NewDecoder(resp.Body).Decode(&created)
+	resp.Body.Close()
 
 	chk := checker.New(2 * time.Second)
-	sched := scheduler.New(redisClient, monitorRepo, chk, slog.Default())
-	if err := sched.EnsureScheduled(ctx); err != nil {
-		t.Fatalf("EnsureScheduled failed: %v", err)
+	runCheck := func() monitor.CheckOutcome {
+		m, err := env.monitorRepo.GetByID(ctx, created.ID)
+		if err != nil {
+			t.Fatalf("load monitor: %v", err)
+		}
+		result := chk.Check(ctx, m.Method, m.URL, m.ExpectedStatusMin, m.ExpectedStatusMax)
+		outcome, err := env.monitorRepo.RecordCheck(ctx, m.ID, result)
+		if err != nil {
+			t.Fatalf("record check: %v", err)
+		}
+		return outcome
 	}
 
-	result := chk.Check(ctx, seeded.Method, seeded.URL, seeded.ExpectedStatusMin, seeded.ExpectedStatusMax)
-	if err := monitorRepo.RecordCheck(ctx, seeded.ID, result); err != nil {
-		t.Fatalf("RecordCheck failed: %v", err)
+	// PENDING -> UP on first success.
+	out := runCheck()
+	if !out.Transitioned || out.To != monitor.StatusUp {
+		t.Fatalf("first successful check: expected transition to UP, got %+v", out)
 	}
 
-	req, _ = http.NewRequest(http.MethodGet, server.URL+"/v1/monitors", nil)
-	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
-	resp, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("second list monitors request failed: %v", err)
+	// First failure: still UP (threshold 2).
+	healthy = false
+	out = runCheck()
+	if out.Transitioned || out.To != monitor.StatusUp {
+		t.Fatalf("first failure: expected no transition (still UP), got %+v", out)
 	}
-	defer resp.Body.Close()
-	if err := json.NewDecoder(resp.Body).Decode(&views); err != nil {
-		t.Fatalf("failed to decode second list monitors response: %v", err)
+
+	// Second consecutive failure: DOWN.
+	out = runCheck()
+	if !out.Transitioned || out.To != monitor.StatusDown {
+		t.Fatalf("second consecutive failure: expected transition to DOWN, got %+v", out)
 	}
-	if len(views) != 1 {
-		t.Fatalf("expected 1 monitor after seeding, got %d", len(views))
-	}
-	if views[0].Status != monitor.StatusUp {
-		t.Errorf("expected seeded monitor status UP, got %s", views[0].Status)
-	}
-	if views[0].LastCheckedAt == nil {
-		t.Error("expected last_checked_at to be populated after a check")
+
+	// Recovery on first success.
+	healthy = true
+	out = runCheck()
+	if !out.Transitioned || out.To != monitor.StatusUp {
+		t.Fatalf("recovery: expected transition to UP, got %+v", out)
 	}
 }
 
 func TestListMonitors_RejectsMissingAuth(t *testing.T) {
-	ctx := context.Background()
-	dsn := startPostgres(t)
-	if err := pgdb.Migrate(dsn, "../../migrations"); err != nil {
-		t.Fatalf("failed to run migrations: %v", err)
-	}
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("failed to connect pool: %v", err)
-	}
-	defer pool.Close()
+	env := newTestEnv(t)
 
-	issuer := auth.NewTokenIssuer("test-secret", 15*time.Minute, 30*24*time.Hour)
-	authService := auth.NewService(auth.NewRepository(pool), issuer)
-	monitorRepo := monitor.NewRepository(pool)
-
-	router := httpapi.NewRouter(authService, issuer, monitorRepo)
-	server := httptest.NewServer(router)
-	defer server.Close()
-
-	resp, err := http.Get(server.URL + "/v1/monitors")
+	resp, err := http.Get(env.server.URL + "/v1/monitors")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}

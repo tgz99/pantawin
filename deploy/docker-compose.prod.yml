@@ -63,8 +63,16 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       SEED_MONITOR_NAME: ${SEED_MONITOR_NAME:-gratisaja.com}
       SEED_MONITOR_URL: ${SEED_MONITOR_URL:-https://gratisaja.com}
+      # M2 email alerts: reach the host-installed Postfix relay via the
+      # Docker host gateway (extra_hosts below). Until Postfix is installed,
+      # sends fail gracefully (logged in notification_log) — the app runs
+      # fine without it.
+      SMTP_ADDR: ${SMTP_ADDR:-host.docker.internal:25}
+      ALERT_FROM: ${ALERT_FROM:-alerts@pantawin.gratisaja.com}
     ports:
       - "127.0.0.1:8081:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     mem_limit: 64m
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
