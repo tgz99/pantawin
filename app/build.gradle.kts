@@ -92,6 +92,9 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
+    // Coil loads monitor favicons (Google s2 favicon service) in the dashboard.
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
     debugImplementation(libs.compose.ui.tooling)
 
     testImplementation(libs.junit)

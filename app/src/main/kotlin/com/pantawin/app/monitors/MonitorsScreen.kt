@@ -1,38 +1,58 @@
 package com.pantawin.app.monitors
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Logout
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.MonitorHeart
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.Pause
+import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
 import com.pantawin.app.push.DegradedBanner
 import com.pantawin.app.ui.EmptyState
 import com.pantawin.app.ui.ErrorState
 import com.pantawin.app.ui.LoadingState
+import com.pantawin.app.ui.StatusVisual
+import com.pantawin.app.ui.theme.StatusDown
+import com.pantawin.app.ui.theme.StatusUp
 import com.pantawin.app.ui.visual
 import com.pantawin.shared.model.MonitorState
 import com.pantawin.shared.model.MonitorStatus
@@ -49,19 +69,34 @@ fun MonitorsScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Pantawin") },
+            CenterAlignedTopAppBar(
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Filled.MonitorHeart,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            "Pantawin",
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
+                    }
+                },
                 actions = {
                     IconButton(onClick = onLogout) {
-                        Icon(Icons.Filled.Logout, contentDescription = "Log out")
+                        Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "Log out")
                     }
                 },
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = onAdd) {
-                Icon(Icons.Filled.Add, contentDescription = "Add monitor")
-            }
+            ExtendedFloatingActionButton(
+                onClick = onAdd,
+                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                text = { Text("Add monitor") },
+            )
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
@@ -73,18 +108,25 @@ fun MonitorsScreen(
                     if (s.monitors.isEmpty()) {
                         EmptyState(
                             title = "No monitors yet",
-                            subtitle = "Tap + to add your first monitor and Pantawin will start watching it.",
+                            subtitle = "Tap “Add monitor” and Pantawin will start watching it around the clock.",
+                            icon = Icons.Filled.MonitorHeart,
                         )
                     } else {
-                        LazyColumn(Modifier.fillMaxSize()) {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                                start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp,
+                            ),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            item(key = "summary") { StatusSummaryCard(s.monitors) }
                             items(s.monitors, key = { it.id }) { m ->
-                                MonitorRow(
+                                MonitorCard(
                                     monitor = m,
                                     onPause = { viewModel.pause(m.id) },
                                     onResume = { viewModel.resume(m.id) },
                                     onDelete = { viewModel.delete(m.id) },
                                 )
-                                HorizontalDivider()
                             }
                         }
                     }
@@ -93,44 +135,175 @@ fun MonitorsScreen(
     }
 }
 
+// Fleet health at a glance: green when everything is up, red when anything
+// is down. Color animates on transitions so a recovery visibly "heals".
 @Composable
-private fun MonitorRow(
+private fun StatusSummaryCard(monitors: List<MonitorStatus>) {
+    val down = monitors.count { it.status == MonitorState.DOWN }
+    val up = monitors.count { it.status == MonitorState.UP }
+    val paused = monitors.count { it.status == MonitorState.PAUSED }
+    val allGood = down == 0
+
+    val container by animateColorAsState(
+        targetValue = if (allGood) StatusUp.copy(alpha = 0.14f) else StatusDown.copy(alpha = 0.14f),
+        label = "summaryContainer",
+    )
+    val accent = if (allGood) StatusUp else StatusDown
+
+    Surface(
+        shape = MaterialTheme.shapes.extraLarge,
+        color = container,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (allGood) Icons.Filled.CheckCircle else Icons.Filled.MonitorHeart,
+                contentDescription = null,
+                tint = accent,
+                modifier = Modifier.size(36.dp),
+            )
+            Column(Modifier.padding(start = 16.dp)) {
+                Text(
+                    if (allGood) "All systems operational" else "$down monitor${if (down > 1) "s" else ""} down",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = accent,
+                )
+                Text(
+                    buildString {
+                        append("$up up")
+                        if (down > 0) append(" · $down down")
+                        if (paused > 0) append(" · $paused paused")
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MonitorCard(
     monitor: MonitorStatus,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val visual = monitor.status.visual()
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+
+    ElevatedCard(shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 14.dp, bottom = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Favicon(monitor.url)
+            Column(Modifier.weight(1f).padding(start = 14.dp, end = 4.dp)) {
+                Text(
+                    monitor.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    monitor.url.removePrefix("https://").removePrefix("http://"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 8.dp),
+                ) {
+                    StatusPill(visual)
+                    monitor.responseTimeMs?.let {
+                        Text(
+                            "$it ms",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 10.dp),
+                        )
+                    }
+                }
+            }
+            if (monitor.status == MonitorState.PAUSED) {
+                CardAction(Icons.Outlined.PlayArrow, "Resume", onResume)
+            } else {
+                CardAction(Icons.Outlined.Pause, "Pause", onPause)
+            }
+            CardAction(Icons.Outlined.Delete, "Delete", onDelete)
+        }
+    }
+}
+
+// Real site favicon via Google's public favicon service, with a globe
+// fallback while loading / for hosts without one.
+@Composable
+private fun Favicon(url: String) {
+    val host = url.removePrefix("https://").removePrefix("http://").substringBefore('/')
+    var loaded by remember { mutableStateOf(false) }
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        modifier = Modifier.size(48.dp),
     ) {
+        Box(contentAlignment = Alignment.Center) {
+            if (!loaded) {
+                Icon(
+                    Icons.Outlined.Language,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+            AsyncImage(
+                model = "https://www.google.com/s2/favicons?domain=$host&sz=64",
+                contentDescription = null,
+                onSuccess = { loaded = true },
+                modifier = Modifier.size(28.dp).clip(MaterialTheme.shapes.extraSmall),
+            )
+        }
+    }
+}
+
+@Composable
+private fun StatusPill(visual: StatusVisual) {
+    Surface(
+        shape = MaterialTheme.shapes.small,
+        color = visual.color.copy(alpha = 0.14f),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+        ) {
+            Icon(
+                visual.icon,
+                contentDescription = null,
+                tint = visual.color,
+                modifier = Modifier.size(14.dp),
+            )
+            Text(
+                visual.label,
+                style = MaterialTheme.typography.labelMedium,
+                color = visual.color,
+                modifier = Modifier.padding(start = 4.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CardAction(icon: ImageVector, label: String, onClick: () -> Unit) {
+    IconButton(onClick = onClick) {
         Icon(
-            visual.icon,
-            contentDescription = visual.label,
-            tint = visual.color,
-            modifier = Modifier.size(28.dp),
+            icon,
+            contentDescription = label,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Column(Modifier.weight(1f).padding(start = 12.dp)) {
-            Text(monitor.name, style = MaterialTheme.typography.titleMedium)
-            Text(monitor.url, style = MaterialTheme.typography.bodySmall)
-            val detail = buildString {
-                append(visual.label)
-                monitor.responseTimeMs?.let { append(" · ${it}ms") }
-            }
-            Text(detail, style = MaterialTheme.typography.bodySmall, color = visual.color)
-        }
-        if (monitor.status == MonitorState.PAUSED) {
-            IconButton(onClick = onResume) {
-                Icon(Icons.Filled.PlayArrow, contentDescription = "Resume")
-            }
-        } else {
-            IconButton(onClick = onPause) {
-                Icon(Icons.Filled.Pause, contentDescription = "Pause")
-            }
-        }
-        IconButton(onClick = onDelete) {
-            Icon(Icons.Filled.Delete, contentDescription = "Delete")
-        }
     }
 }

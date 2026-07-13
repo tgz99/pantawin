@@ -29,4 +29,6 @@ data class MonitorInput(
     @SerialName("interval_seconds") val intervalSeconds: Int? = null,
     @SerialName("timeout_ms") val timeoutMs: Int? = null,
     @SerialName("failure_threshold") val failureThreshold: Int? = null,
+    // Subset of ["email", "push"] (M3 per-monitor channel toggle).
+    @SerialName("alert_channels") val alertChannels: List<String>? = null,
 )

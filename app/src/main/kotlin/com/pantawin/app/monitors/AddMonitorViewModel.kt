@@ -20,12 +20,16 @@ class AddMonitorViewModel(private val gateway: MonitorGateway) : ViewModel() {
     private val _state = MutableStateFlow(AddMonitorState())
     val state: StateFlow<AddMonitorState> = _state.asStateFlow()
 
-    fun submit(name: String, url: String, intervalSeconds: Int) {
+    fun submit(name: String, url: String, intervalSeconds: Int, channels: List<String> = listOf("email", "push")) {
         // Client-side pre-check for fast feedback; the server's SSRF guard is
         // the actual authority.
         val trimmedUrl = url.trim()
         if (!trimmedUrl.startsWith("http://") && !trimmedUrl.startsWith("https://")) {
             _state.value = AddMonitorState(error = "URL must start with http:// or https://")
+            return
+        }
+        if (channels.isEmpty()) {
+            _state.value = AddMonitorState(error = "Pick at least one alert channel")
             return
         }
         _state.value = AddMonitorState(submitting = true)
@@ -36,6 +40,7 @@ class AddMonitorViewModel(private val gateway: MonitorGateway) : ViewModel() {
                         name = name.trim().ifBlank { null },
                         url = trimmedUrl,
                         intervalSeconds = intervalSeconds,
+                        alertChannels = channels,
                     ),
                 )
             }.onSuccess {
