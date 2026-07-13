@@ -35,7 +35,14 @@ class PantawinApp : Application() {
         PantawinRealtimeClient(httpClient, BuildConfig.API_BASE_URL)
     }
 
+    // True when a FirebaseApp exists — either auto-initialized by the
+    // google-services plugin (google-services.json present) or built
+    // programmatically from BuildConfig below. Mirrors the server's
+    // dormant FcmChannel: no Firebase project, no push, app still works.
     val pushEnabled: Boolean
+        get() = FirebaseApp.getApps(this).isNotEmpty()
+
+    private val hasBuildConfigFirebase: Boolean
         get() = BuildConfig.FIREBASE_PROJECT_ID.isNotBlank() &&
             BuildConfig.FIREBASE_APP_ID.isNotBlank() &&
             BuildConfig.FIREBASE_API_KEY.isNotBlank() &&
@@ -47,16 +54,18 @@ class PantawinApp : Application() {
         initFirebaseIfConfigured()
     }
 
-    // Initialize Firebase programmatically from BuildConfig instead of the
-    // google-services plugin, so the app compiles + runs without a Firebase
-    // project. Push stays dormant until these secrets are filled in
-    // (app/secrets.properties) — mirrors the server's dormant FcmChannel.
+    // Fallback path: initialize Firebase programmatically from BuildConfig
+    // (app/secrets.properties) when google-services.json isn't present but
+    // the FIREBASE_* secrets are.
     private fun initFirebaseIfConfigured() {
-        if (!pushEnabled) {
+        if (FirebaseApp.getApps(this).isNotEmpty()) {
+            Log.i(TAG, "FCM push enabled (google-services.json)")
+            return
+        }
+        if (!hasBuildConfigFirebase) {
             Log.i(TAG, "FCM push dormant (Firebase not configured)")
             return
         }
-        if (FirebaseApp.getApps(this).isNotEmpty()) return
         val options = FirebaseOptions.Builder()
             .setProjectId(BuildConfig.FIREBASE_PROJECT_ID)
             .setApplicationId(BuildConfig.FIREBASE_APP_ID)

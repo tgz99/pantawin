@@ -69,6 +69,13 @@ services:
       # fine without it.
       SMTP_ADDR: ${SMTP_ADDR:-host.docker.internal:25}
       ALERT_FROM: ${ALERT_FROM:-alerts@pantawin.gratisaja.com}
+      # M3 push: dormant until FCM_PROJECT_ID is set in .env and the
+      # Firebase service-account JSON is placed at
+      # deploy/fcm-service-account.json (gitignored, chmod 600).
+      FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
+      FCM_CREDENTIALS_FILE: ${FCM_CREDENTIALS_FILE:-}
+    volumes:
+      - ./fcm-service-account.json:/run/secrets/fcm-service-account.json:ro
     ports:
       - "127.0.0.1:8081:8080"
     extra_hosts:

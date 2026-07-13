@@ -30,6 +30,10 @@ server/vendor/
 deploy/.env
 app/secrets.properties
 !app/secrets.properties.example
+# Firebase (M3 push) — per-environment
+app/google-services.json
+deploy/fcm-service-account.json
+creds/
 
 # SQLDelight generated code
 **/generated/

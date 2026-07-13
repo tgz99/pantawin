@@ -8,6 +8,14 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// google-services.json is gitignored; apply the plugin only when it exists so
+// the app still builds without a Firebase project (push simply stays dormant,
+// see PantawinApp). With the file present the plugin auto-initializes the
+// default FirebaseApp — no FIREBASE_* entries in secrets.properties needed.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 // M0-only bootstrap credentials (see app/secrets.properties.example) — the
 // dashboard screen logs in with these since there's no login screen yet
 // (M1 adds one). File is gitignored; falls back to empty strings so CI's
@@ -21,9 +29,7 @@ val secrets = Properties().apply {
 
 android {
     namespace = "com.pantawin.app"
-    compileSdk {
-        version = release(37)
-    }
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.pantawin.app"
