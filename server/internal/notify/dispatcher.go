@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -95,13 +96,23 @@ func (d *Dispatcher) deliver(ctx context.Context, event IncidentEvent) {
 		return
 	}
 
+	// Channels deliver concurrently so one slow/broken transport (e.g. an
+	// SMTP relay that is down) never delays the others. deliverOne is
+	// self-contained: each goroutine claims, sends, and confirms its own
+	// (incident, channel, event_type) row.
+	var wg sync.WaitGroup
 	for _, chName := range channelNames {
 		channel, ok := d.channels[chName]
 		if !ok {
 			continue // unknown/disabled channel (e.g. "push" before M3)
 		}
-		d.deliverOne(ctx, channel, event, target)
+		wg.Add(1)
+		go func(ch AlertChannel) {
+			defer wg.Done()
+			d.deliverOne(ctx, ch, event, target)
+		}(channel)
 	}
+	wg.Wait()
 }
 
 // deliverOne implements claim -> send -> confirm. The INSERT ... ON CONFLICT
