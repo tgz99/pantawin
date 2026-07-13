@@ -2,6 +2,8 @@ package notify
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/smtp"
@@ -87,9 +89,29 @@ func buildMIME(from, to, subject, htmlBody string) []byte {
 	fmt.Fprintf(&b, "From: Pantawin <%s>\r\n", from)
 	fmt.Fprintf(&b, "To: %s\r\n", to)
 	fmt.Fprintf(&b, "Subject: %s\r\n", subject)
+	// Date and Message-ID are required for acceptance at the majors —
+	// Gmail hard-rejects mail without a Message-ID (550 5.7.1).
+	fmt.Fprintf(&b, "Date: %s\r\n", time.Now().UTC().Format(time.RFC1123Z))
+	fmt.Fprintf(&b, "Message-ID: <%s@%s>\r\n", messageID(), domainOf(from))
 	b.WriteString("MIME-Version: 1.0\r\n")
 	b.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
 	b.WriteString("\r\n")
 	b.WriteString(htmlBody)
 	return []byte(b.String())
+}
+
+func messageID() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		// Fall back to a timestamp; uniqueness per-second is enough here.
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(buf)
+}
+
+func domainOf(addr string) string {
+	if i := strings.LastIndexByte(addr, '@'); i >= 0 {
+		return addr[i+1:]
+	}
+	return "localhost"
 }

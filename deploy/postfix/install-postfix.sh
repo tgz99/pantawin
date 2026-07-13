@@ -37,6 +37,9 @@ postconf -e "myorigin = ${MAIL_DOMAIN}"
 # ufw denies inbound port 25 from the internet — verify with the check the
 # script prints at the end.
 postconf -e "inet_interfaces = all"
+# Deliver over IPv4 only — the SPF record authorizes ip4:103.181.182.61;
+# an IPv6 send would come from an unauthorized address and fail SPF.
+postconf -e "inet_protocols = ipv4"
 postconf -e "mynetworks = 127.0.0.0/8 [::1]/128 172.16.0.0/12"
 postconf -e "smtpd_relay_restrictions = permit_mynetworks, reject_unauth_destination"
 
