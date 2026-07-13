@@ -19,7 +19,7 @@ const MaxMonitorsPerUser = 50
 
 const monitorColumns = `id, user_id, name, url, method, interval_seconds, timeout_ms,
 	expected_status_min, expected_status_max, failure_threshold,
-	status, consecutive_failures, created_at`
+	status, consecutive_failures, created_at, alert_channels`
 
 // CreateParams carries validated input — URL format and SSRF validation
 // happen in the HTTP layer before this is called.
@@ -33,6 +33,7 @@ type CreateParams struct {
 	ExpectedStatusMin int
 	ExpectedStatusMax int
 	FailureThreshold  int
+	AlertChannels     []string // e.g. ["email"], ["push"], ["email","push"]
 }
 
 func (r *Repository) Create(ctx context.Context, p CreateParams) (Monitor, error) {
@@ -61,18 +62,24 @@ func (r *Repository) Create(ctx context.Context, p CreateParams) (Monitor, error
 		return Monitor{}, ErrQuotaExceeded
 	}
 
+	alertChannels := p.AlertChannels
+	if len(alertChannels) == 0 {
+		alertChannels = []string{"email"}
+	}
+
 	var m Monitor
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO monitors (user_id, name, url, method, interval_seconds, timeout_ms,
-		                      expected_status_min, expected_status_max, failure_threshold)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		                      expected_status_min, expected_status_max, failure_threshold,
+		                      alert_channels)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING `+monitorColumns,
 		p.UserID, p.Name, p.URL, p.Method, p.IntervalSeconds, p.TimeoutMS,
-		p.ExpectedStatusMin, p.ExpectedStatusMax, p.FailureThreshold,
+		p.ExpectedStatusMin, p.ExpectedStatusMax, p.FailureThreshold, alertChannels,
 	).Scan(
 		&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
 		&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
-		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt,
+		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels,
 	); err != nil {
 		return Monitor{}, fmt.Errorf("insert monitor: %w", err)
 	}
@@ -93,7 +100,7 @@ func (r *Repository) GetForUser(ctx context.Context, userID, monitorID int64) (M
 	).Scan(
 		&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
 		&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
-		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt,
+		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Monitor{}, ErrNotFound
@@ -114,6 +121,7 @@ type UpdateParams struct {
 	ExpectedStatusMin *int
 	ExpectedStatusMax *int
 	FailureThreshold  *int
+	AlertChannels     *[]string // nil = unchanged
 }
 
 func (r *Repository) Update(ctx context.Context, userID, monitorID int64, p UpdateParams) (Monitor, error) {
@@ -127,16 +135,17 @@ func (r *Repository) Update(ctx context.Context, userID, monitorID int64, p Upda
 			timeout_ms          = COALESCE($7, timeout_ms),
 			expected_status_min = COALESCE($8, expected_status_min),
 			expected_status_max = COALESCE($9, expected_status_max),
-			failure_threshold   = COALESCE($10, failure_threshold)
+			failure_threshold   = COALESCE($10, failure_threshold),
+			alert_channels      = COALESCE($11, alert_channels)
 		WHERE id = $1 AND user_id = $2
 		RETURNING `+monitorColumns,
 		monitorID, userID,
 		p.Name, p.URL, p.Method, p.IntervalSeconds, p.TimeoutMS,
-		p.ExpectedStatusMin, p.ExpectedStatusMax, p.FailureThreshold,
+		p.ExpectedStatusMin, p.ExpectedStatusMax, p.FailureThreshold, p.AlertChannels,
 	).Scan(
 		&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
 		&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
-		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt,
+		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Monitor{}, ErrNotFound
@@ -176,7 +185,7 @@ func (r *Repository) SetPaused(ctx context.Context, userID, monitorID int64, pau
 	).Scan(
 		&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
 		&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
-		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt,
+		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Monitor{}, ErrNotFound

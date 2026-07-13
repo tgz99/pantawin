@@ -31,6 +31,7 @@ type Monitor struct {
 	FailureThreshold   int
 	Status             Status
 	ConsecutiveFailures int
+	AlertChannels      []string
 	CreatedAt          time.Time
 }
 

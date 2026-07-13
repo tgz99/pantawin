@@ -29,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.pantawin.app.push.DegradedBanner
 import com.pantawin.app.ui.EmptyState
 import com.pantawin.app.ui.ErrorState
 import com.pantawin.app.ui.LoadingState
@@ -42,6 +43,7 @@ fun MonitorsScreen(
     viewModel: MonitorsViewModel,
     onAdd: () -> Unit,
     onLogout: () -> Unit,
+    showPushDegradedBanner: Boolean = false,
 ) {
     val state by viewModel.uiState.collectAsState()
 
@@ -62,29 +64,31 @@ fun MonitorsScreen(
             }
         },
     ) { padding ->
-        when (val s = state) {
-            is MonitorsUiState.Loading -> LoadingState(Modifier.padding(padding))
-            is MonitorsUiState.Error -> ErrorState(s.message, onRetry = viewModel::refresh, modifier = Modifier.padding(padding))
-            is MonitorsUiState.Loaded ->
-                if (s.monitors.isEmpty()) {
-                    EmptyState(
-                        title = "No monitors yet",
-                        subtitle = "Tap + to add your first monitor and Pantawin will start watching it.",
-                        modifier = Modifier.padding(padding),
-                    )
-                } else {
-                    LazyColumn(Modifier.fillMaxSize().padding(padding)) {
-                        items(s.monitors, key = { it.id }) { m ->
-                            MonitorRow(
-                                monitor = m,
-                                onPause = { viewModel.pause(m.id) },
-                                onResume = { viewModel.resume(m.id) },
-                                onDelete = { viewModel.delete(m.id) },
-                            )
-                            HorizontalDivider()
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            if (showPushDegradedBanner) DegradedBanner()
+            when (val s = state) {
+                is MonitorsUiState.Loading -> LoadingState()
+                is MonitorsUiState.Error -> ErrorState(s.message, onRetry = viewModel::refresh)
+                is MonitorsUiState.Loaded ->
+                    if (s.monitors.isEmpty()) {
+                        EmptyState(
+                            title = "No monitors yet",
+                            subtitle = "Tap + to add your first monitor and Pantawin will start watching it.",
+                        )
+                    } else {
+                        LazyColumn(Modifier.fillMaxSize()) {
+                            items(s.monitors, key = { it.id }) { m ->
+                                MonitorRow(
+                                    monitor = m,
+                                    onPause = { viewModel.pause(m.id) },
+                                    onResume = { viewModel.resume(m.id) },
+                                    onDelete = { viewModel.delete(m.id) },
+                                )
+                                HorizontalDivider()
+                            }
                         }
                     }
-                }
+            }
         }
     }
 }

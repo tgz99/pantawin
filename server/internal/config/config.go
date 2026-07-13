@@ -34,6 +34,13 @@ type Config struct {
 	AlertFrom string
 	// DeepLinkBase builds the pantawin://monitor/{id} link in emails.
 	DeepLinkBase string
+
+	// M3 push (FCM). Dormant until both are set — see notify.NewFcmChannel.
+	// FCMCredentialsFile is a path to the service-account JSON mounted into
+	// the container; FCMCredentialsJSON is the raw JSON as an alternative.
+	FCMProjectID       string
+	FCMCredentialsFile string
+	FCMCredentialsJSON string
 }
 
 func Load() (Config, error) {
@@ -49,9 +56,12 @@ func Load() (Config, error) {
 		SeedMonitorName: getEnv("SEED_MONITOR_NAME", "gratisaja.com"),
 		SeedMonitorURL:  getEnv("SEED_MONITOR_URL", "https://gratisaja.com"),
 		CheckTimeout:    10 * time.Second,
-		SMTPAddr:        getEnv("SMTP_ADDR", "127.0.0.1:25"),
-		AlertFrom:       getEnv("ALERT_FROM", "alerts@pantawin.gratisaja.com"),
-		DeepLinkBase:    getEnv("DEEP_LINK_BASE", "pantawin://monitor/"),
+		SMTPAddr:           getEnv("SMTP_ADDR", "127.0.0.1:25"),
+		AlertFrom:          getEnv("ALERT_FROM", "alerts@pantawin.gratisaja.com"),
+		DeepLinkBase:       getEnv("DEEP_LINK_BASE", "pantawin://monitor/"),
+		FCMProjectID:       os.Getenv("FCM_PROJECT_ID"),
+		FCMCredentialsFile: os.Getenv("FCM_CREDENTIALS_FILE"),
+		FCMCredentialsJSON: os.Getenv("FCM_CREDENTIALS_JSON"),
 	}
 
 	if redisDBStr := os.Getenv("REDIS_DB"); redisDBStr != "" {

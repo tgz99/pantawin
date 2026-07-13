@@ -20,17 +20,18 @@ import (
 
 const scheduleKey = "pantawin:checks:schedule"
 
-// TransitionHook is invoked after a check causes a status transition
-// (UP->DOWN or DOWN->UP). M2's incident/notification dispatcher plugs in
-// here; at M1 it's a no-op.
-type TransitionHook func(ctx context.Context, m monitor.Monitor, outcome monitor.CheckOutcome, result checker.Result)
+// AfterCheckHook fires after EVERY recorded check (not only on transitions).
+// The handler publishes a live WebSocket status update for every check (M3
+// realtime dashboard) and, when outcome.Transitioned is true, drives the
+// M2 incident/notification pipeline.
+type AfterCheckHook func(ctx context.Context, m monitor.Monitor, outcome monitor.CheckOutcome, result checker.Result)
 
 type Scheduler struct {
 	redis        *redis.Client
 	repo         *monitor.Repository
 	checker      *checker.Checker
 	guard        *ssrf.Guard
-	onTransition TransitionHook
+	afterCheck   AfterCheckHook
 	tickInterval time.Duration
 	logger       *slog.Logger
 }
@@ -46,10 +47,10 @@ func New(redisClient *redis.Client, repo *monitor.Repository, chk *checker.Check
 	}
 }
 
-// SetTransitionHook installs the M2+ notification hook. Must be called
-// before Run.
-func (s *Scheduler) SetTransitionHook(hook TransitionHook) {
-	s.onTransition = hook
+// SetAfterCheckHook installs the post-check hook (realtime + notifications).
+// Must be called before Run.
+func (s *Scheduler) SetAfterCheckHook(hook AfterCheckHook) {
+	s.afterCheck = hook
 }
 
 // Schedule (re)queues a monitor for its next check at now + delay. Called
@@ -187,8 +188,10 @@ func (s *Scheduler) processMonitor(ctx context.Context, monitorIDStr string) {
 	outcome, err := s.repo.RecordCheck(ctx, m.ID, result)
 	if err != nil {
 		s.logger.Error("scheduler: failed to record check result", "monitor_id", m.ID, "error", err)
-	} else if outcome.Transitioned && s.onTransition != nil {
-		s.onTransition(ctx, m, outcome, result)
+	} else if s.afterCheck != nil {
+		// Fires on every check: the handler publishes a live WS status
+		// update, and handles incidents/notifications when transitioned.
+		s.afterCheck(ctx, m, outcome, result)
 	}
 
 	if err := s.Schedule(ctx, m.ID, time.Duration(m.IntervalSeconds)*time.Second); err != nil {

@@ -47,8 +47,18 @@ class SessionManager(
     private suspend fun accessToken(): String? = context.dataStore.data.first()[accessKey]
     private suspend fun refreshToken(): String? = context.dataStore.data.first()[refreshKey]
 
+    /** Current access token, for opening the realtime WebSocket. */
+    suspend fun currentAccessToken(): String? = accessToken()
+
     /** Thrown after a refresh attempt fails — callers route the user to login. */
     class SessionExpired : Exception()
+
+    /** Register an FCM device token with the backend (POST /devices). No-op
+     * if not logged in — the token is re-sent on next login via onNewToken. */
+    suspend fun registerPushToken(fcmToken: String) {
+        if (accessToken() == null) return
+        authed { token -> api.registerDevice(token, fcmToken) }
+    }
 
     suspend fun <T> authed(call: suspend (accessToken: String) -> T): T {
         val token = accessToken() ?: throw SessionExpired()

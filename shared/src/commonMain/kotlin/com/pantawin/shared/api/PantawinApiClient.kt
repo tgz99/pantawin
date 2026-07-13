@@ -37,6 +37,9 @@ class PantawinApiClient(
     @Serializable
     private data class RefreshRequest(val refresh_token: String)
 
+    @Serializable
+    private data class RegisterDeviceRequest(val fcm_token: String, val platform: String = "android")
+
     // --- Auth ---
 
     suspend fun login(email: String, password: String): Tokens =
@@ -92,6 +95,16 @@ class PantawinApiClient(
     suspend fun resumeMonitor(accessToken: String, id: Long): Monitor =
         client.post("$baseUrl/v1/monitors/$id/resume") { bearer(accessToken) }
             .requireSuccess().body()
+
+    // --- Devices (M3 push) ---
+
+    suspend fun registerDevice(accessToken: String, fcmToken: String) {
+        client.post("$baseUrl/v1/devices") {
+            bearer(accessToken)
+            contentType(ContentType.Application.Json)
+            setBody(RegisterDeviceRequest(fcmToken))
+        }.requireSuccess()
+    }
 }
 
 private fun io.ktor.client.request.HttpRequestBuilder.bearer(token: String) {

@@ -27,14 +27,15 @@ type monitorHandlers struct {
 }
 
 type monitorRequest struct {
-	Name              *string `json:"name"`
-	URL               *string `json:"url"`
-	Method            *string `json:"method"`
-	IntervalSeconds   *int    `json:"interval_seconds"`
-	TimeoutMS         *int    `json:"timeout_ms"`
-	ExpectedStatusMin *int    `json:"expected_status_min"`
-	ExpectedStatusMax *int    `json:"expected_status_max"`
-	FailureThreshold  *int    `json:"failure_threshold"`
+	Name              *string   `json:"name"`
+	URL               *string   `json:"url"`
+	Method            *string   `json:"method"`
+	IntervalSeconds   *int      `json:"interval_seconds"`
+	TimeoutMS         *int      `json:"timeout_ms"`
+	ExpectedStatusMin *int      `json:"expected_status_min"`
+	ExpectedStatusMax *int      `json:"expected_status_max"`
+	FailureThreshold  *int      `json:"failure_threshold"`
+	AlertChannels     *[]string `json:"alert_channels"`
 }
 
 type monitorResponse struct {
@@ -47,6 +48,7 @@ type monitorResponse struct {
 	ExpectedStatusMin int            `json:"expected_status_min"`
 	ExpectedStatusMax int            `json:"expected_status_max"`
 	FailureThreshold  int            `json:"failure_threshold"`
+	AlertChannels     []string       `json:"alert_channels"`
 	Status            monitor.Status `json:"status"`
 	CreatedAt         time.Time      `json:"created_at"`
 }
@@ -56,8 +58,25 @@ func toMonitorResponse(m monitor.Monitor) monitorResponse {
 		ID: m.ID, Name: m.Name, URL: m.URL, Method: m.Method,
 		IntervalSeconds: m.IntervalSeconds, TimeoutMS: m.TimeoutMS,
 		ExpectedStatusMin: m.ExpectedStatusMin, ExpectedStatusMax: m.ExpectedStatusMax,
-		FailureThreshold: m.FailureThreshold, Status: m.Status, CreatedAt: m.CreatedAt,
+		FailureThreshold: m.FailureThreshold, AlertChannels: m.AlertChannels,
+		Status: m.Status, CreatedAt: m.CreatedAt,
 	}
+}
+
+// validAlertChannels checks the requested channels are a subset of the
+// supported set. "push" is accepted even when FCM is dormant — the
+// dispatcher simply skips an unregistered channel, so a monitor can opt into
+// push ahead of the server being configured for it.
+func validAlertChannels(channels []string) bool {
+	if len(channels) == 0 {
+		return false
+	}
+	for _, c := range channels {
+		if c != "email" && c != "push" {
+			return false
+		}
+	}
+	return true
 }
 
 // Spec section 3.2: min interval 30s, default 60s; timeout default 10s;
@@ -131,6 +150,12 @@ func (h *monitorHandlers) validateAndApplyDefaults(ctx context.Context, req moni
 			return p, "failure_threshold must be between 1 and 10"
 		}
 		p.FailureThreshold = *req.FailureThreshold
+	}
+	if req.AlertChannels != nil {
+		if !validAlertChannels(*req.AlertChannels) {
+			return p, "alert_channels must be a non-empty subset of [email, push]"
+		}
+		p.AlertChannels = *req.AlertChannels
 	}
 	return p, ""
 }
@@ -244,12 +269,16 @@ func (h *monitorHandlers) updateMonitor(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "failure_threshold must be between 1 and 10")
 		return
 	}
+	if req.AlertChannels != nil && !validAlertChannels(*req.AlertChannels) {
+		writeError(w, http.StatusBadRequest, "alert_channels must be a non-empty subset of [email, push]")
+		return
+	}
 
 	m, err := h.repo.Update(r.Context(), userID, id, monitor.UpdateParams{
 		Name: req.Name, URL: req.URL, Method: req.Method,
 		IntervalSeconds: req.IntervalSeconds, TimeoutMS: req.TimeoutMS,
 		ExpectedStatusMin: req.ExpectedStatusMin, ExpectedStatusMax: req.ExpectedStatusMax,
-		FailureThreshold: req.FailureThreshold,
+		FailureThreshold: req.FailureThreshold, AlertChannels: req.AlertChannels,
 	})
 	if err != nil {
 		if errors.Is(err, monitor.ErrNotFound) {

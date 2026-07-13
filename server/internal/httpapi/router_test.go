@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/testcontainers/testcontainers-go"
@@ -27,8 +28,10 @@ import (
 	"github.com/tgz99/pantawin/server/internal/auth"
 	"github.com/tgz99/pantawin/server/internal/checker"
 	pgdb "github.com/tgz99/pantawin/server/internal/db"
+	"github.com/tgz99/pantawin/server/internal/device"
 	"github.com/tgz99/pantawin/server/internal/httpapi"
 	"github.com/tgz99/pantawin/server/internal/monitor"
+	"github.com/tgz99/pantawin/server/internal/realtime"
 	"github.com/tgz99/pantawin/server/internal/scheduler"
 	"github.com/tgz99/pantawin/server/internal/ssrf"
 )
@@ -113,6 +116,7 @@ type testEnv struct {
 	monitorRepo *monitor.Repository
 	sched       *scheduler.Scheduler
 	issuer      *auth.TokenIssuer
+	publisher   *realtime.Publisher
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -151,12 +155,18 @@ func newTestEnv(t *testing.T) *testEnv {
 	chk := checker.New(5 * time.Second)
 	sched := scheduler.New(redisClient, monitorRepo, chk, guard, slog.Default())
 
+	deviceRepo := device.NewRepository(pool)
+	publisher := realtime.NewPublisher(redisClient)
+	wsHandler := realtime.NewHandler(redisClient, slog.Default())
+
 	router := httpapi.NewRouter(httpapi.RouterDeps{
 		AuthService: authService,
 		Issuer:      issuer,
 		MonitorRepo: monitorRepo,
+		DeviceRepo:  deviceRepo,
 		Guard:       guard,
 		Scheduler:   sched,
+		Realtime:    wsHandler,
 		Redis:       redisClient,
 	})
 	server := httptest.NewServer(router)
@@ -164,7 +174,7 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	return &testEnv{
 		server: server, pool: pool, redisClient: redisClient,
-		monitorRepo: monitorRepo, sched: sched, issuer: issuer,
+		monitorRepo: monitorRepo, sched: sched, issuer: issuer, publisher: publisher,
 	}
 }
 
@@ -478,5 +488,135 @@ func TestListMonitors_RejectsMissingAuth(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("expected 401 without an Authorization header, got %d", resp.StatusCode)
+	}
+}
+
+func TestWebSocketReceivesPublishedEvents(t *testing.T) {
+	env := newTestEnv(t)
+	tk := env.register(t, "ws@pantawin.test", "correct horse battery staple")
+	userID, err := env.issuer.ParseAccessToken(tk.AccessToken)
+	if err != nil {
+		t.Fatalf("parse token: %v", err)
+	}
+
+	wsURL := "ws" + strings.TrimPrefix(env.server.URL, "http") + "/v1/ws?access_token=" + tk.AccessToken
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("ws dial failed: %v", err)
+	}
+	defer conn.CloseNow()
+
+	// Give the server a beat to establish its Redis subscription before we
+	// publish, otherwise the message can be missed.
+	time.Sleep(300 * time.Millisecond)
+
+	rtMS := 123
+	want := realtime.Event{
+		Type: "status", MonitorID: 42, MonitorName: "gratisaja.com",
+		Status: "UP", ResponseTimeMS: &rtMS, At: time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := env.publisher.Publish(ctx, userID, want); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("ws read failed: %v", err)
+	}
+	var got realtime.Event
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal ws event: %v", err)
+	}
+	if got.Type != "status" || got.MonitorID != 42 || got.Status != "UP" {
+		t.Errorf("unexpected ws event: %+v", got)
+	}
+}
+
+func TestWebSocketRejectsBadToken(t *testing.T) {
+	env := newTestEnv(t)
+	wsURL := "ws" + strings.TrimPrefix(env.server.URL, "http") + "/v1/ws?access_token=garbage"
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err == nil {
+		conn.CloseNow()
+		t.Fatal("expected ws dial to fail with an invalid token")
+	}
+}
+
+func TestRegisterDevice(t *testing.T) {
+	env := newTestEnv(t)
+	tk := env.register(t, "device@pantawin.test", "correct horse battery staple")
+
+	resp := env.do(t, http.MethodPost, "/v1/devices", tk.AccessToken, map[string]any{
+		"fcm_token": "fake-fcm-token-abc123", "platform": "android",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 from device register, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Re-registering the same token is idempotent (upsert), not a conflict.
+	resp = env.do(t, http.MethodPost, "/v1/devices", tk.AccessToken, map[string]any{
+		"fcm_token": "fake-fcm-token-abc123",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Errorf("expected 201 on idempotent re-register, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	var count int
+	env.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM devices WHERE fcm_token = 'fake-fcm-token-abc123'`).Scan(&count)
+	if count != 1 {
+		t.Errorf("expected exactly 1 device row after re-register, got %d", count)
+	}
+}
+
+func TestAlertChannelsSettableAndValidated(t *testing.T) {
+	env := newTestEnv(t)
+	tk := env.register(t, "channels@pantawin.test", "correct horse battery staple")
+
+	// Create with push+email.
+	resp := env.do(t, http.MethodPost, "/v1/monitors", tk.AccessToken, map[string]any{
+		"url": "https://example.com", "alert_channels": []string{"email", "push"},
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+	var created struct {
+		ID            int64    `json:"id"`
+		AlertChannels []string `json:"alert_channels"`
+	}
+	json.NewDecoder(resp.Body).Decode(&created)
+	resp.Body.Close()
+	if len(created.AlertChannels) != 2 {
+		t.Errorf("expected 2 alert channels, got %v", created.AlertChannels)
+	}
+
+	// Invalid channel rejected.
+	resp = env.do(t, http.MethodPost, "/v1/monitors", tk.AccessToken, map[string]any{
+		"url": "https://example.com", "alert_channels": []string{"carrier-pigeon"},
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid channel, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Default when unspecified is email.
+	resp = env.do(t, http.MethodPost, "/v1/monitors", tk.AccessToken, map[string]any{
+		"url": "https://default.example.com",
+	})
+	var def struct {
+		AlertChannels []string `json:"alert_channels"`
+	}
+	json.NewDecoder(resp.Body).Decode(&def)
+	resp.Body.Close()
+	if len(def.AlertChannels) != 1 || def.AlertChannels[0] != "email" {
+		t.Errorf("expected default [email], got %v", def.AlertChannels)
 	}
 }

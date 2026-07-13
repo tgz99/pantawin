@@ -33,11 +33,11 @@ func (r *Repository) SeedMonitor(ctx context.Context, userID int64, name, url st
 		VALUES ($1, $2, $3)
 		RETURNING id, user_id, name, url, method, interval_seconds, timeout_ms,
 		          expected_status_min, expected_status_max, failure_threshold,
-		          status, consecutive_failures, created_at
+		          status, consecutive_failures, created_at, alert_channels
 	`, userID, name, url).Scan(
 		&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
 		&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
-		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt,
+		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels,
 	); err != nil {
 		return Monitor{}, fmt.Errorf("insert seed monitor: %w", err)
 	}
@@ -49,13 +49,13 @@ func (r *Repository) findByURL(ctx context.Context, userID int64, url string) (M
 	err := r.pool.QueryRow(ctx, `
 		SELECT id, user_id, name, url, method, interval_seconds, timeout_ms,
 		       expected_status_min, expected_status_max, failure_threshold,
-		       status, consecutive_failures, created_at
+		       status, consecutive_failures, created_at, alert_channels
 		FROM monitors WHERE user_id = $1 AND url = $2
 		LIMIT 1
 	`, userID, url).Scan(
 		&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
 		&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
-		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt,
+		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels,
 	)
 	if err != nil {
 		return Monitor{}, err
@@ -67,7 +67,7 @@ func (r *Repository) ListForUser(ctx context.Context, userID int64) ([]Monitor, 
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, user_id, name, url, method, interval_seconds, timeout_ms,
 		       expected_status_min, expected_status_max, failure_threshold,
-		       status, consecutive_failures, created_at
+		       status, consecutive_failures, created_at, alert_channels
 		FROM monitors WHERE user_id = $1
 		ORDER BY id
 	`, userID)
@@ -82,7 +82,7 @@ func (r *Repository) ListForUser(ctx context.Context, userID int64) ([]Monitor, 
 		if err := rows.Scan(
 			&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
 			&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
-			&m.Status, &m.ConsecutiveFailures, &m.CreatedAt,
+			&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels,
 		); err != nil {
 			return nil, fmt.Errorf("scan monitor row: %w", err)
 		}
@@ -117,12 +117,12 @@ func (r *Repository) GetByID(ctx context.Context, id int64) (Monitor, error) {
 	err := r.pool.QueryRow(ctx, `
 		SELECT id, user_id, name, url, method, interval_seconds, timeout_ms,
 		       expected_status_min, expected_status_max, failure_threshold,
-		       status, consecutive_failures, created_at
+		       status, consecutive_failures, created_at, alert_channels
 		FROM monitors WHERE id = $1
 	`, id).Scan(
 		&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
 		&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
-		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt,
+		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels,
 	)
 	if err != nil {
 		return Monitor{}, fmt.Errorf("get monitor by id: %w", err)
@@ -134,7 +134,7 @@ func (r *Repository) ListAll(ctx context.Context) ([]Monitor, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, user_id, name, url, method, interval_seconds, timeout_ms,
 		       expected_status_min, expected_status_max, failure_threshold,
-		       status, consecutive_failures, created_at
+		       status, consecutive_failures, created_at, alert_channels
 		FROM monitors
 		WHERE status != 'PAUSED'
 		ORDER BY id
@@ -150,7 +150,7 @@ func (r *Repository) ListAll(ctx context.Context) ([]Monitor, error) {
 		if err := rows.Scan(
 			&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
 			&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
-			&m.Status, &m.ConsecutiveFailures, &m.CreatedAt,
+			&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels,
 		); err != nil {
 			return nil, fmt.Errorf("scan monitor row: %w", err)
 		}

@@ -41,6 +41,13 @@ android {
             "API_BASE_URL",
             "\"${secrets.getProperty("API_BASE_URL", "https://api.pantawin.gratisaja.com")}\"",
         )
+        // Firebase / FCM config (M3). Empty = push dormant; the app runs and
+        // WebSocket realtime works without it. Fill these from your Firebase
+        // project's google-services.json values to activate push.
+        buildConfigField("String", "FIREBASE_PROJECT_ID", "\"${secrets.getProperty("FIREBASE_PROJECT_ID", "")}\"")
+        buildConfigField("String", "FIREBASE_APP_ID", "\"${secrets.getProperty("FIREBASE_APP_ID", "")}\"")
+        buildConfigField("String", "FIREBASE_API_KEY", "\"${secrets.getProperty("FIREBASE_API_KEY", "")}\"")
+        buildConfigField("String", "FIREBASE_SENDER_ID", "\"${secrets.getProperty("FIREBASE_SENDER_ID", "")}\"")
     }
 
     buildTypes {
@@ -77,6 +84,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.navigation.compose)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
     debugImplementation(libs.compose.ui.tooling)
 
     testImplementation(libs.junit)
