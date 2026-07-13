@@ -70,6 +70,20 @@ func (r *Repository) GetUserByID(ctx context.Context, id int64) (User, error) {
 	return u, nil
 }
 
+// UpdatePassword replaces a user's password hash.
+func (r *Repository) UpdatePassword(ctx context.Context, userID int64, passwordHash string) error {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE users SET password_hash = $2 WHERE id = $1`, userID, passwordHash,
+	)
+	if err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
 func (r *Repository) CountUsers(ctx context.Context) (int, error) {
 	var n int
 	if err := r.pool.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&n); err != nil {

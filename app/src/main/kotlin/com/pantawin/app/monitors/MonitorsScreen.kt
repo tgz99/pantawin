@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.MonitorHeart
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
@@ -63,6 +64,7 @@ fun MonitorsScreen(
     viewModel: MonitorsViewModel,
     onAdd: () -> Unit,
     onLogout: () -> Unit,
+    onChangePassword: () -> Unit = {},
     showPushDegradedBanner: Boolean = false,
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -85,6 +87,9 @@ fun MonitorsScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onChangePassword) {
+                        Icon(Icons.Outlined.Key, contentDescription = "Change password")
+                    }
                     IconButton(onClick = onLogout) {
                         Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "Log out")
                     }

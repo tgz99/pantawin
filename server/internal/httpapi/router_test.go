@@ -1,6 +1,6 @@
-//go:build integration
+﻿//go:build integration
 
-// Integration suite — needs a Docker daemon (testcontainers-go spins up
+// Integration suite â€” needs a Docker daemon (testcontainers-go spins up
 // real Postgres + Redis). Run with: go test -tags=integration ./...
 // Deliberately excluded from the default `go test ./...` run so unit tests
 // stay fast and don't require Docker to be available.
@@ -230,9 +230,95 @@ func (e *testEnv) do(t *testing.T, method, path, accessToken string, body any) *
 	return resp
 }
 
+func TestChangePasswordFlow(t *testing.T) {
+	env := newTestEnv(t)
+	tk := env.register(t, "chpw@pantawin.test", "Correct-Horse-42-staple")
+
+	// Weak new password rejected (policy: min 8, 1 upper, 1 digit).
+	resp := env.do(t, http.MethodPost, "/v1/auth/change-password", tk.AccessToken, map[string]any{
+		"current_password": "Correct-Horse-42-staple", "new_password": "weakpass",
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for weak password, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Wrong current password rejected with 400 (not 401 — access token is valid).
+	resp = env.do(t, http.MethodPost, "/v1/auth/change-password", tk.AccessToken, map[string]any{
+		"current_password": "not-my-password", "new_password": "NewSecret99",
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for wrong current password, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Unauthenticated request rejected.
+	resp = env.do(t, http.MethodPost, "/v1/auth/change-password", "", map[string]any{
+		"current_password": "Correct-Horse-42-staple", "new_password": "NewSecret99",
+	})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without token, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Valid change succeeds and returns a fresh token pair.
+	resp = env.do(t, http.MethodPost, "/v1/auth/change-password", tk.AccessToken, map[string]any{
+		"current_password": "Correct-Horse-42-staple", "new_password": "NewSecret99",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for valid change, got %d", resp.StatusCode)
+	}
+	var fresh tokens
+	if err := json.NewDecoder(resp.Body).Decode(&fresh); err != nil {
+		t.Fatalf("decode change-password response: %v", err)
+	}
+	resp.Body.Close()
+	if fresh.AccessToken == "" || fresh.RefreshToken == "" {
+		t.Fatal("expected fresh tokens after password change")
+	}
+
+	// Old password no longer logs in; new one does.
+	resp, err := http.Post(env.server.URL+"/v1/auth/login", "application/json",
+		strings.NewReader(`{"email":"chpw@pantawin.test","password":"Correct-Horse-42-staple"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 logging in with old password, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+	resp, err = http.Post(env.server.URL+"/v1/auth/login", "application/json",
+		strings.NewReader(`{"email":"chpw@pantawin.test","password":"NewSecret99"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 logging in with new password, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Pre-change refresh token was revoked (all sessions invalidated).
+	resp = env.do(t, http.MethodPost, "/v1/auth/refresh", "", map[string]any{
+		"refresh_token": tk.RefreshToken,
+	})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for revoked pre-change refresh token, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// The fresh post-change refresh token still works.
+	resp = env.do(t, http.MethodPost, "/v1/auth/refresh", "", map[string]any{
+		"refresh_token": fresh.RefreshToken,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for post-change refresh token, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
 func TestMonitorCRUDLifecycle(t *testing.T) {
 	env := newTestEnv(t)
-	tk := env.register(t, "crud@pantawin.test", "correct horse battery staple")
+	tk := env.register(t, "crud@pantawin.test", "Correct-Horse-42-staple")
 
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -320,7 +406,7 @@ func TestMonitorCRUDLifecycle(t *testing.T) {
 
 func TestMonitorValidation(t *testing.T) {
 	env := newTestEnv(t)
-	tk := env.register(t, "validation@pantawin.test", "correct horse battery staple")
+	tk := env.register(t, "validation@pantawin.test", "Correct-Horse-42-staple")
 
 	cases := []struct {
 		name string
@@ -343,8 +429,8 @@ func TestMonitorValidation(t *testing.T) {
 
 func TestMonitorOwnershipIsolation(t *testing.T) {
 	env := newTestEnv(t)
-	alice := env.register(t, "alice@pantawin.test", "correct horse battery staple")
-	bob := env.register(t, "bob@pantawin.test", "correct horse battery staple")
+	alice := env.register(t, "alice@pantawin.test", "Correct-Horse-42-staple")
+	bob := env.register(t, "bob@pantawin.test", "Correct-Horse-42-staple")
 
 	resp := env.do(t, http.MethodPost, "/v1/monitors", alice.AccessToken, map[string]any{
 		"url": "https://example.com",
@@ -373,7 +459,7 @@ func TestMonitorOwnershipIsolation(t *testing.T) {
 
 func TestRefreshRotation(t *testing.T) {
 	env := newTestEnv(t)
-	tk := env.register(t, "rotate@pantawin.test", "correct horse battery staple")
+	tk := env.register(t, "rotate@pantawin.test", "Correct-Horse-42-staple")
 
 	// First refresh succeeds and yields new tokens.
 	resp := env.do(t, http.MethodPost, "/v1/auth/refresh", "", map[string]any{
@@ -411,11 +497,11 @@ func TestRefreshRotation(t *testing.T) {
 // End-to-end state machine: a monitor with failure_threshold 2 pointed at a
 // target that starts failing goes DOWN only after the second consecutive
 // failed check, and recovers on the first success (spec 7.2 item 1, at the
-// integration level — the exhaustive cases live in the statemachine unit
+// integration level â€” the exhaustive cases live in the statemachine unit
 // suite).
 func TestStateMachineEndToEnd(t *testing.T) {
 	env := newTestEnv(t)
-	tk := env.register(t, "sm@pantawin.test", "correct horse battery staple")
+	tk := env.register(t, "sm@pantawin.test", "Correct-Horse-42-staple")
 	ctx := context.Background()
 
 	healthy := true
@@ -493,7 +579,7 @@ func TestListMonitors_RejectsMissingAuth(t *testing.T) {
 
 func TestWebSocketReceivesPublishedEvents(t *testing.T) {
 	env := newTestEnv(t)
-	tk := env.register(t, "ws@pantawin.test", "correct horse battery staple")
+	tk := env.register(t, "ws@pantawin.test", "Correct-Horse-42-staple")
 	userID, err := env.issuer.ParseAccessToken(tk.AccessToken)
 	if err != nil {
 		t.Fatalf("parse token: %v", err)
@@ -550,7 +636,7 @@ func TestWebSocketRejectsBadToken(t *testing.T) {
 
 func TestRegisterDevice(t *testing.T) {
 	env := newTestEnv(t)
-	tk := env.register(t, "device@pantawin.test", "correct horse battery staple")
+	tk := env.register(t, "device@pantawin.test", "Correct-Horse-42-staple")
 
 	resp := env.do(t, http.MethodPost, "/v1/devices", tk.AccessToken, map[string]any{
 		"fcm_token": "fake-fcm-token-abc123", "platform": "android",
@@ -579,7 +665,7 @@ func TestRegisterDevice(t *testing.T) {
 
 func TestAlertChannelsSettableAndValidated(t *testing.T) {
 	env := newTestEnv(t)
-	tk := env.register(t, "channels@pantawin.test", "correct horse battery staple")
+	tk := env.register(t, "channels@pantawin.test", "Correct-Horse-42-staple")
 
 	// Create with push+email.
 	resp := env.do(t, http.MethodPost, "/v1/monitors", tk.AccessToken, map[string]any{

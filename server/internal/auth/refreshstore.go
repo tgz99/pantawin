@@ -61,6 +61,16 @@ func (s *RefreshStore) Consume(ctx context.Context, rawToken string) (userID int
 	return userID, nil
 }
 
+// RevokeAllForUser deletes every refresh token a user holds — called on
+// password change so stolen/old sessions can't silently refresh anymore.
+func (s *RefreshStore) RevokeAllForUser(ctx context.Context, userID int64) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM refresh_tokens WHERE user_id = $1`, userID)
+	if err != nil {
+		return fmt.Errorf("revoke refresh tokens: %w", err)
+	}
+	return nil
+}
+
 // PurgeExpired deletes rows that no longer matter (expired or long-revoked)
 // — called opportunistically, not on a scheduler, at M1 volume.
 func (s *RefreshStore) PurgeExpired(ctx context.Context) error {

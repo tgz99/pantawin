@@ -15,6 +15,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.pantawin.app.PantawinApp
 import com.pantawin.app.auth.AuthViewModel
+import com.pantawin.app.auth.ChangePasswordScreen
+import com.pantawin.app.auth.ChangePasswordViewModel
 import com.pantawin.app.auth.LoginScreen
 import com.pantawin.app.data.MonitorGateway
 import com.pantawin.app.data.SessionManager
@@ -32,6 +34,7 @@ import kotlinx.coroutines.launch
 private object Routes {
     const val Monitors = "monitors"
     const val Add = "add"
+    const val ChangePassword = "change-password"
 }
 
 // savedStateHandle key: Add screen -> Monitors screen "a monitor was created".
@@ -97,8 +100,17 @@ fun PantawinNavHost(session: SessionManager) {
             MonitorsScreen(
                 viewModel = vm,
                 onAdd = { navController.navigate(Routes.Add) },
+                onChangePassword = { navController.navigate(Routes.ChangePassword) },
                 onLogout = { vm.viewModelScope.launch { session.logout() } },
                 showPushDegradedBanner = pushDegraded,
+            )
+        }
+        composable(Routes.ChangePassword) {
+            val vm: ChangePasswordViewModel = viewModel(factory = factory { ChangePasswordViewModel(session) })
+            ChangePasswordScreen(
+                viewModel = vm,
+                onDone = { navController.popBackStack() },
+                onBack = { navController.popBackStack() },
             )
         }
         composable(Routes.Add) {

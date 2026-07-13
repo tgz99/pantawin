@@ -40,6 +40,9 @@ class PantawinApiClient(
     @Serializable
     private data class RegisterDeviceRequest(val fcm_token: String, val platform: String = "android")
 
+    @Serializable
+    private data class ChangePasswordRequest(val current_password: String, val new_password: String)
+
     // --- Auth ---
 
     suspend fun login(email: String, password: String): Tokens =
@@ -58,6 +61,15 @@ class PantawinApiClient(
         client.post("$baseUrl/v1/auth/refresh") {
             contentType(ContentType.Application.Json)
             setBody(RefreshRequest(refreshToken))
+        }.requireSuccess().body()
+
+    /** Rotates the password; the server revokes all prior sessions and
+     *  returns a fresh token pair for this one. */
+    suspend fun changePassword(accessToken: String, currentPassword: String, newPassword: String): Tokens =
+        client.post("$baseUrl/v1/auth/change-password") {
+            bearer(accessToken)
+            contentType(ContentType.Application.Json)
+            setBody(ChangePasswordRequest(currentPassword, newPassword))
         }.requireSuccess().body()
 
     // --- Monitors ---

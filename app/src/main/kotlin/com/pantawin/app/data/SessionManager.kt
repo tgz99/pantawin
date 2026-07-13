@@ -53,6 +53,14 @@ class SessionManager(
     /** Thrown after a refresh attempt fails — callers route the user to login. */
     class SessionExpired : Exception()
 
+    /** Change the account password. The server revokes every other session's
+     * refresh token and returns a fresh pair for this one, which we persist —
+     * this device stays signed in, all others must log in again. */
+    suspend fun changePassword(currentPassword: String, newPassword: String) {
+        val tokens = authed { token -> api.changePassword(token, currentPassword, newPassword) }
+        save(tokens.accessToken, tokens.refreshToken)
+    }
+
     /** Register an FCM device token with the backend (POST /devices). No-op
      * if not logged in — the token is re-sent on next login via onNewToken. */
     suspend fun registerPushToken(fcmToken: String) {

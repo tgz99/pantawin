@@ -59,6 +59,11 @@ func NewRouter(deps RouterDeps) http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(requireAuth(deps.Issuer))
 
+			// Authenticated but still rate-limited: current-password
+			// verification is a brute-force target like login.
+			r.With(rateLimit(deps.Redis, "change-password", 5, time.Minute)).
+				Post("/auth/change-password", authH.changePassword)
+
 			r.Get("/monitors", monitorH.listMonitors)
 			r.With(rateLimit(deps.Redis, "monitor-create", 20, time.Minute)).
 				Post("/monitors", monitorH.createMonitor)
