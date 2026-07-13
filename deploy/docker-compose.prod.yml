@@ -74,6 +74,8 @@ services:
       # deploy/fcm-service-account.json (gitignored, chmod 600).
       FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
       FCM_CREDENTIALS_FILE: ${FCM_CREDENTIALS_FILE:-}
+      # Google sign-in: the OAuth WEB client id (audience of app ID tokens).
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
     volumes:
       - ./fcm-service-account.json:/run/secrets/fcm-service-account.json:ro
     ports:
