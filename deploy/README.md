@@ -97,3 +97,31 @@ git pull
 cd deploy
 docker compose -f docker-compose.prod.yml --env-file .env up -d --build api
 ```
+
+## M2 — Email alerts (self-hosted Postfix, separate step)
+
+Run this only after M0/M1 have been stable for a while. Postfix is host-installed
+(systemd), NOT containerized — see the rationale in the script header. It never
+touches nginx/docker/anana; kill-switch is `systemctl stop postfix opendkim`.
+
+```sh
+cd /opt/pantawin/deploy/postfix
+./install-postfix.sh        # idempotent; installs postfix+opendkim, prints DNS records
+```
+
+The script prints the SPF, DKIM, and DMARC TXT records to add in Cloudflare
+(gratisaja.com zone). After DNS propagates, smoke-test before trusting it:
+
+```sh
+apt-get install -y swaks
+swaks --to you@gmail.com --from alerts@pantawin.gratisaja.com --server 127.0.0.1
+```
+
+The API already reaches Postfix via the Docker host gateway (SMTP_ADDR in
+`.env`). Until Postfix is installed, alert sends fail gracefully and are logged
+in the `notification_log` table with `ok=false` — the app runs fine without it.
+
+**Known limitation:** the VPS PTR is `103-181-182-61.domainesia.io` (not under
+gratisaja.com, not changeable on a shared VPS) and the IP has no sending
+reputation, so early mail may land in spam at Gmail/Outlook even with correct
+SPF/DKIM. This is inherent to self-hosting on this box.
