@@ -64,6 +64,7 @@ fun MonitorsScreen(
     viewModel: MonitorsViewModel,
     onAdd: () -> Unit,
     onLogout: () -> Unit,
+    onOpen: (Long) -> Unit = {},
     onChangePassword: () -> Unit = {},
     showPushDegradedBanner: Boolean = false,
 ) {
@@ -128,6 +129,7 @@ fun MonitorsScreen(
                             items(s.monitors, key = { it.id }) { m ->
                                 MonitorCard(
                                     monitor = m,
+                                    onOpen = { onOpen(m.id) },
                                     onPause = { viewModel.pause(m.id) },
                                     onResume = { viewModel.resume(m.id) },
                                     onDelete = { viewModel.delete(m.id) },
@@ -194,13 +196,18 @@ private fun StatusSummaryCard(monitors: List<MonitorStatus>) {
 @Composable
 private fun MonitorCard(
     monitor: MonitorStatus,
+    onOpen: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val visual = monitor.status.visual()
 
-    ElevatedCard(shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
+    ElevatedCard(
+        onClick = onOpen,
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 14.dp, bottom = 14.dp),
             verticalAlignment = Alignment.CenterVertically,

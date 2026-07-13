@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/redis/go-redis/v9"
+	"github.com/tgz99/pantawin/server/internal/analytics"
 	"github.com/tgz99/pantawin/server/internal/auth"
 	"github.com/tgz99/pantawin/server/internal/device"
 	"github.com/tgz99/pantawin/server/internal/monitor"
@@ -24,6 +25,7 @@ type RouterDeps struct {
 	Scheduler   SchedulerControl
 	Realtime    *realtime.Handler
 	Redis       *redis.Client
+	Rollup      *analytics.Rollup
 }
 
 func NewRouter(deps RouterDeps) http.Handler {
@@ -41,6 +43,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 	authH := &authHandlers{service: deps.AuthService}
 	monitorH := &monitorHandlers{repo: deps.MonitorRepo, guard: deps.Guard, sched: deps.Scheduler}
 	deviceH := &deviceHandlers{repo: deps.DeviceRepo}
+	statsH := &statsHandlers{repo: deps.MonitorRepo, rollup: deps.Rollup}
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Route("/auth", func(r chi.Router) {
@@ -75,6 +78,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 				r.Delete("/", monitorH.deleteMonitor)
 				r.Post("/pause", monitorH.pauseMonitor)
 				r.Post("/resume", monitorH.resumeMonitor)
+				r.Get("/stats", statsH.getStats)
 			})
 
 			r.Post("/devices", deviceH.register)

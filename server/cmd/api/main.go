@@ -16,6 +16,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"github.com/tgz99/pantawin/server/internal/analytics"
 	"github.com/tgz99/pantawin/server/internal/auth"
 	"github.com/tgz99/pantawin/server/internal/checker"
 	"github.com/tgz99/pantawin/server/internal/config"
@@ -139,6 +140,10 @@ func run(logger *slog.Logger) error {
 	publisher := realtime.NewPublisher(redisClient)
 	wsHandler := realtime.NewHandler(redisClient, logger)
 
+	// M4: analytics rollups (idempotent upserts over a trailing window).
+	rollup := analytics.NewRollup(pool, logger)
+	go rollup.Run(ctx)
+
 	sched.SetAfterCheckHook(func(hookCtx context.Context, m monitor.Monitor, outcome monitor.CheckOutcome, result checker.Result) {
 		// Live status on every check (M3 dashboard).
 		publishStatus(hookCtx, publisher, m, result, logger)
@@ -162,6 +167,7 @@ func run(logger *slog.Logger) error {
 		Scheduler:   sched,
 		Realtime:    wsHandler,
 		Redis:       redisClient,
+		Rollup:      rollup,
 	})
 
 	server := &http.Server{

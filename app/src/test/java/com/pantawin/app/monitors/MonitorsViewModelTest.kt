@@ -4,6 +4,7 @@ import com.pantawin.app.data.MonitorGateway
 import com.pantawin.shared.model.Monitor
 import com.pantawin.shared.model.MonitorInput
 import com.pantawin.shared.model.MonitorState
+import com.pantawin.shared.model.MonitorStats
 import com.pantawin.shared.model.MonitorStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -40,6 +41,7 @@ class MonitorsViewModelTest {
         override suspend fun pause(id: Long) { paused += id }
         override suspend fun resume(id: Long) {}
         override suspend fun delete(id: Long) { deleted += id }
+        override suspend fun stats(id: Long, period: String): MonitorStats = throw NotImplementedError()
     }
 
     private fun status(id: Long, state: MonitorState) =

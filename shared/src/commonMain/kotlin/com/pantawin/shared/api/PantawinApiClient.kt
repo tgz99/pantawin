@@ -2,6 +2,7 @@ package com.pantawin.shared.api
 
 import com.pantawin.shared.model.Monitor
 import com.pantawin.shared.model.MonitorInput
+import com.pantawin.shared.model.MonitorStats
 import com.pantawin.shared.model.MonitorStatus
 import com.pantawin.shared.model.Tokens
 import io.ktor.client.HttpClient
@@ -109,6 +110,12 @@ class PantawinApiClient(
     suspend fun deleteMonitor(accessToken: String, id: Long) {
         client.delete("$baseUrl/v1/monitors/$id") { bearer(accessToken) }.requireSuccess()
     }
+
+    // --- Stats (M4 analytics) ---
+
+    suspend fun getStats(accessToken: String, id: Long, period: String): MonitorStats =
+        client.get("$baseUrl/v1/monitors/$id/stats?period=$period") { bearer(accessToken) }
+            .requireSuccess().body()
 
     suspend fun pauseMonitor(accessToken: String, id: Long): Monitor =
         client.post("$baseUrl/v1/monitors/$id/pause") { bearer(accessToken) }

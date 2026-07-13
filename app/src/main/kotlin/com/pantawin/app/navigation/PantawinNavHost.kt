@@ -10,9 +10,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import androidx.navigation.navDeepLink
 import com.pantawin.app.PantawinApp
 import com.pantawin.app.auth.AuthViewModel
 import com.pantawin.app.auth.ChangePasswordScreen
@@ -23,6 +26,8 @@ import com.pantawin.app.data.SessionManager
 import com.pantawin.app.data.SessionMonitorGateway
 import com.pantawin.app.monitors.AddMonitorScreen
 import com.pantawin.app.monitors.AddMonitorViewModel
+import com.pantawin.app.monitors.MonitorDetailScreen
+import com.pantawin.app.monitors.MonitorDetailViewModel
 import com.pantawin.app.monitors.MonitorsScreen
 import com.pantawin.app.monitors.MonitorsViewModel
 import com.pantawin.app.push.rememberNotificationPermissionState
@@ -35,6 +40,9 @@ private object Routes {
     const val Monitors = "monitors"
     const val Add = "add"
     const val ChangePassword = "change-password"
+    const val Detail = "monitor/{id}"
+
+    fun detail(id: Long) = "monitor/$id"
 }
 
 // savedStateHandle key: Add screen -> Monitors screen "a monitor was created".
@@ -100,9 +108,23 @@ fun PantawinNavHost(session: SessionManager) {
             MonitorsScreen(
                 viewModel = vm,
                 onAdd = { navController.navigate(Routes.Add) },
+                onOpen = { id -> navController.navigate(Routes.detail(id)) },
                 onChangePassword = { navController.navigate(Routes.ChangePassword) },
                 onLogout = { vm.viewModelScope.launch { session.logout() } },
                 showPushDegradedBanner = pushDegraded,
+            )
+        }
+        composable(
+            route = Routes.Detail,
+            arguments = listOf(navArgument("id") { type = NavType.LongType }),
+            // Notification taps land here: pantawin://monitor/{id}.
+            deepLinks = listOf(navDeepLink { uriPattern = "pantawin://monitor/{id}" }),
+        ) { entry ->
+            val id = entry.arguments?.getLong("id") ?: return@composable
+            val vm: MonitorDetailViewModel = viewModel(factory = factory { MonitorDetailViewModel(gateway, id) })
+            MonitorDetailScreen(
+                viewModel = vm,
+                onBack = { navController.popBackStack() },
             )
         }
         composable(Routes.ChangePassword) {

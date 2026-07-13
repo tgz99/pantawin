@@ -25,6 +25,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/tgz99/pantawin/server/internal/analytics"
 	"github.com/tgz99/pantawin/server/internal/auth"
 	"github.com/tgz99/pantawin/server/internal/checker"
 	pgdb "github.com/tgz99/pantawin/server/internal/db"
@@ -176,6 +177,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		Scheduler:   sched,
 		Realtime:    wsHandler,
 		Redis:       redisClient,
+		Rollup:      analytics.NewRollup(pool, slog.Default()),
 	})
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
