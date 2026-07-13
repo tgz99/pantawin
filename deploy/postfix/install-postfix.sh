@@ -16,6 +16,10 @@ MAIL_DOMAIN="pantawin.gratisaja.com"
 MYHOSTNAME="mail.${MAIL_DOMAIN}"
 DKIM_SELECTOR="pantawin1"
 DKIM_KEYDIR="/etc/opendkim/keys/${MAIL_DOMAIN}"
+# Bounces (DSNs) are addressed to the alert sender; forward them to a real
+# mailbox so delivery failures are visible. The domain has no MX, so without
+# this rewrite locally-generated bounces are silently undeliverable.
+BOUNCE_FORWARD_TO="kotakahmad@gmail.com"
 
 echo "==> Installing packages (postfix, opendkim)"
 export DEBIAN_FRONTEND=noninteractive
@@ -42,6 +46,9 @@ postconf -e "inet_interfaces = all"
 postconf -e "inet_protocols = ipv4"
 postconf -e "mynetworks = 127.0.0.0/8 [::1]/128 172.16.0.0/12"
 postconf -e "smtpd_relay_restrictions = permit_mynetworks, reject_unauth_destination"
+# Forward mail addressed to the alert sender (chiefly bounce DSNs) to a
+# monitored mailbox.
+postconf -e "virtual_alias_maps = inline:{alerts@${MAIL_DOMAIN}=${BOUNCE_FORWARD_TO}}"
 
 echo "==> Restricting inbound SMTP: allow Docker bridge, deny the internet"
 if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
@@ -58,6 +65,9 @@ postconf -e "milter_default_action = accept"
 postconf -e "milter_protocol = 6"
 postconf -e "smtpd_milters = inet:127.0.0.1:8891"
 postconf -e "non_smtpd_milters = inet:127.0.0.1:8891"
+# Sign Postfix-generated bounces too — Gmail rejects unauthenticated DSNs
+# (null envelope sender = no SPF identity, so DKIM must carry them).
+postconf -e "internal_mail_filter_classes = bounce"
 
 echo "==> Configuring OpenDKIM"
 mkdir -p "${DKIM_KEYDIR}"
@@ -71,7 +81,11 @@ else
 fi
 
 cat > /etc/opendkim.conf <<EOF
+# UserID is load-bearing: without it the daemon runs as root and refuses
+# the opendkim-owned key ("key data is not secure"), tempfailing all mail.
+UserID                  opendkim
 Syslog                  yes
+SyslogSuccess           yes
 UMask                   002
 Mode                    sv
 Socket                  inet:8891@127.0.0.1
@@ -79,7 +93,9 @@ PidFile                 /run/opendkim/opendkim.pid
 OversignHeaders         From
 TrustAnchorFile         /usr/share/dns/root.key
 KeyTable                /etc/opendkim/KeyTable
-SigningTable            /etc/opendkim/SigningTable
+# refile: is required — the SigningTable key is a wildcard (*@domain),
+# which a plain file map matches literally (i.e. never).
+SigningTable            refile:/etc/opendkim/SigningTable
 InternalHosts           /etc/opendkim/TrustedHosts
 EOF
 
@@ -91,10 +107,13 @@ cat > /etc/opendkim/SigningTable <<EOF
 *@${MAIL_DOMAIN} ${DKIM_SELECTOR}._domainkey.${MAIL_DOMAIN}
 EOF
 
+# InternalHosts decides sign-vs-verify: alert mail arrives from the Docker
+# bridge (172.x), so it must be listed or OpenDKIM verifies instead of signs.
 cat > /etc/opendkim/TrustedHosts <<EOF
 127.0.0.1
 ::1
 localhost
+172.16.0.0/12
 EOF
 
 echo "==> Memory cap via systemd drop-in (shared VPS)"

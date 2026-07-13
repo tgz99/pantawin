@@ -34,6 +34,9 @@ private object Routes {
     const val Add = "add"
 }
 
+// savedStateHandle key: Add screen -> Monitors screen "a monitor was created".
+private const val KeyMonitorAdded = "monitor_added"
+
 // Minimal ViewModel factory for manual DI (M1). Each ViewModel gets exactly
 // the dependency it needs.
 private inline fun <VM : ViewModel> factory(crossinline create: () -> VM) =
@@ -79,8 +82,18 @@ fun PantawinNavHost(session: SessionManager) {
     }
 
     NavHost(navController = navController, startDestination = Routes.Monitors) {
-        composable(Routes.Monitors) {
+        composable(Routes.Monitors) { entry ->
             val vm: MonitorsViewModel = viewModel(factory = factory { MonitorsViewModel(gateway, realtimeEvents) })
+            // AddMonitorScreen signals a successful create through the saved
+            // state of this back-stack entry; refetch so the new monitor
+            // shows immediately on return.
+            val monitorAdded by entry.savedStateHandle.getStateFlow(KeyMonitorAdded, false).collectAsState()
+            LaunchedEffect(monitorAdded) {
+                if (monitorAdded) {
+                    vm.refresh()
+                    entry.savedStateHandle[KeyMonitorAdded] = false
+                }
+            }
             MonitorsScreen(
                 viewModel = vm,
                 onAdd = { navController.navigate(Routes.Add) },
@@ -92,7 +105,10 @@ fun PantawinNavHost(session: SessionManager) {
             val vm: AddMonitorViewModel = viewModel(factory = factory { AddMonitorViewModel(gateway) })
             AddMonitorScreen(
                 viewModel = vm,
-                onDone = { navController.popBackStack() },
+                onDone = {
+                    navController.previousBackStackEntry?.savedStateHandle?.set(KeyMonitorAdded, true)
+                    navController.popBackStack()
+                },
                 onBack = { navController.popBackStack() },
             )
         }

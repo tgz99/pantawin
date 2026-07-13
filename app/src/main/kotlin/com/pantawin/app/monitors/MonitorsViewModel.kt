@@ -58,6 +58,12 @@ class MonitorsViewModel(
 
     private fun applyEvent(event: RealtimeEvent) {
         val current = _uiState.value as? MonitorsUiState.Loaded ?: return
+        // An event for a monitor we don't have means the list is stale
+        // (e.g. added from another device) — refetch instead of patching.
+        if (current.monitors.none { it.id == event.monitorId }) {
+            refresh()
+            return
+        }
         val newState = runCatching { MonitorState.valueOf(event.status) }.getOrNull() ?: return
         val updated = current.monitors.map { m ->
             if (m.id == event.monitorId) {
