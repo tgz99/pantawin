@@ -84,10 +84,18 @@ func (s *Service) GoogleLogin(ctx context.Context, rawIDToken string) (Tokens, e
 		if hashErr != nil {
 			return Tokens{}, fmt.Errorf("hash placeholder password: %w", hashErr)
 		}
-		user, err = s.repo.CreateUser(ctx, identity.Email, hash)
+		// Google verified this email itself — no OTP step needed (M6.2).
+		user, err = s.repo.CreateUser(ctx, identity.Email, hash, true)
 	}
 	if err != nil {
 		return Tokens{}, err
+	}
+	if !user.EmailVerified {
+		// Linking into an email/password account that never finished OTP
+		// verification: Google's proof of ownership supersedes it.
+		if err := s.repo.MarkEmailVerified(ctx, identity.Email); err != nil {
+			return Tokens{}, err
+		}
 	}
 	return s.issueTokens(ctx, user.ID)
 }

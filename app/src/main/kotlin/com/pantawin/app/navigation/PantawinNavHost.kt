@@ -22,10 +22,10 @@ import com.pantawin.app.data.SessionTeamGateway
 import com.pantawin.app.data.TeamGateway
 import com.pantawin.app.team.TeamScreen
 import com.pantawin.app.team.TeamViewModel
+import com.pantawin.app.auth.AuthFlow
 import com.pantawin.app.auth.AuthViewModel
 import com.pantawin.app.auth.ChangePasswordScreen
 import com.pantawin.app.auth.ChangePasswordViewModel
-import com.pantawin.app.auth.LoginScreen
 import com.pantawin.app.data.MonitorGateway
 import com.pantawin.app.data.SessionManager
 import com.pantawin.app.data.SessionMonitorGateway
@@ -73,7 +73,7 @@ fun PantawinNavHost(session: SessionManager) {
 
     if (!loggedIn) {
         val authVm: AuthViewModel = viewModel(factory = factory { AuthViewModel(session) })
-        LoginScreen(authVm)
+        AuthFlow(authVm)
         return
     }
 

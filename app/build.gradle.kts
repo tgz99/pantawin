@@ -45,8 +45,8 @@ android {
         applicationId = "com.pantawin.app"
         minSdk = 30
         targetSdk = 37
-        versionCode = 4
-        versionName = "1.2.0" // M6: team monitoring + in-app member management
+        versionCode = 5
+        versionName = "1.3.0" // M6.2: email/password registration + OTP verification
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

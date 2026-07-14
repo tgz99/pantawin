@@ -45,20 +45,26 @@ func (c *EmailChannel) Send(ctx context.Context, event IncidentEvent, target Cha
 	if err != nil {
 		return fmt.Errorf("render email: %w", err)
 	}
+	return SendRaw(ctx, c.smtpAddr, c.from, target.Emails, content.Subject, content.HTML)
+}
 
-	msg := buildMIME(c.from, target.Emails, content.Subject, content.HTML)
+// SendRaw dials the relay and delivers a single MIME message — the low-level
+// primitive shared by EmailChannel (incident alerts) and auth's OTP mailer
+// (verification codes), which have no reason to duplicate the SMTP dance.
+func SendRaw(ctx context.Context, smtpAddr, from string, to []string, subject, htmlBody string) error {
+	msg := buildMIME(from, to, subject, htmlBody)
 
 	// net/smtp has no context support, so bound the dial and the whole
 	// SMTP conversation with explicit deadlines instead of smtp.SendMail.
-	conn, err := net.DialTimeout("tcp", c.smtpAddr, smtpDialTimeout)
+	conn, err := net.DialTimeout("tcp", smtpAddr, smtpDialTimeout)
 	if err != nil {
 		return fmt.Errorf("smtp dial: %w", err)
 	}
 	_ = conn.SetDeadline(time.Now().Add(smtpTotalTimeout))
 
-	host, _, err := net.SplitHostPort(c.smtpAddr)
+	host, _, err := net.SplitHostPort(smtpAddr)
 	if err != nil {
-		host = c.smtpAddr
+		host = smtpAddr
 	}
 	client, err := smtp.NewClient(conn, host)
 	if err != nil {
@@ -67,14 +73,14 @@ func (c *EmailChannel) Send(ctx context.Context, event IncidentEvent, target Cha
 	}
 	defer client.Close()
 
-	if err := client.Mail(c.from); err != nil {
+	if err := client.Mail(from); err != nil {
 		return fmt.Errorf("smtp mail from: %w", err)
 	}
 	// One message, one RCPT per recipient — Postfix fans the delivery out.
 	// Any rejected recipient fails the send so the retrier re-attempts; the
 	// duplicate to already-accepted recipients is the lesser evil vs. a team
 	// member silently never getting the alert.
-	for _, rcpt := range target.Emails {
+	for _, rcpt := range to {
 		if err := client.Rcpt(rcpt); err != nil {
 			return fmt.Errorf("smtp rcpt to %s: %w", rcpt, err)
 		}

@@ -51,6 +51,12 @@ class PantawinApiClient(
     @Serializable
     private data class GoogleLoginRequest(val id_token: String)
 
+    @Serializable
+    private data class VerifyOtpRequest(val email: String, val code: String)
+
+    @Serializable
+    private data class ResendOtpRequest(val email: String)
+
     // --- Auth ---
 
     suspend fun login(email: String, password: String): Tokens =
@@ -59,11 +65,29 @@ class PantawinApiClient(
             setBody(LoginRequest(email, password))
         }.requireSuccess().body()
 
-    suspend fun register(email: String, password: String): Tokens =
+    /** Starts email/password signup. No session yet — the server emails a
+     * verification code; call [verifyOtp] with it to finish and log in. */
+    suspend fun register(email: String, password: String) {
         client.post("$baseUrl/v1/auth/register") {
             contentType(ContentType.Application.Json)
             setBody(LoginRequest(email, password))
+        }.requireSuccess()
+    }
+
+    /** Completes email/password signup and returns a session. */
+    suspend fun verifyOtp(email: String, code: String): Tokens =
+        client.post("$baseUrl/v1/auth/verify-otp") {
+            contentType(ContentType.Application.Json)
+            setBody(VerifyOtpRequest(email, code))
         }.requireSuccess().body()
+
+    /** Re-sends the verification code for an account still pending. */
+    suspend fun resendOtp(email: String) {
+        client.post("$baseUrl/v1/auth/resend-otp") {
+            contentType(ContentType.Application.Json)
+            setBody(ResendOtpRequest(email))
+        }.requireSuccess()
+    }
 
     /** Exchanges a Google ID token (from Credential Manager) for a session. */
     suspend fun loginWithGoogle(idToken: String): Tokens =

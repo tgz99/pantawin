@@ -39,6 +39,21 @@ class SessionManager(
         save(tokens.accessToken, tokens.refreshToken)
     }
 
+    /** Starts email/password signup — no session yet, a code is emailed. */
+    suspend fun register(email: String, password: String) {
+        api.register(email, password)
+    }
+
+    /** Completes email/password signup; on success behaves like [login]. */
+    suspend fun verifyOtp(email: String, code: String) {
+        val tokens = api.verifyOtp(email, code)
+        save(tokens.accessToken, tokens.refreshToken)
+    }
+
+    suspend fun resendOtp(email: String) {
+        api.resendOtp(email)
+    }
+
     suspend fun logout() {
         context.dataStore.edit { it.clear() }
     }

@@ -15,6 +15,11 @@ var ErrInvalidCredentials = errors.New("invalid email or password")
 // account creation must be gated once a team uses them).
 var ErrSignupNotAllowed = errors.New("signup is not allowed for this email")
 
+// ErrEmailNotVerified blocks login until the OTP step completes (M6.2).
+// Google-created accounts are verified at creation, so this only ever
+// applies to the email/password path.
+var ErrEmailNotVerified = errors.New("email not verified")
+
 type Tokens struct {
 	AccessToken  string
 	RefreshToken string
@@ -31,6 +36,17 @@ type Service struct {
 	// wired, signup is closed-by-default: only env entries or invited emails
 	// may create accounts.
 	allowlistStore func(ctx context.Context, email string) (bool, error)
+	// otpMailer delivers the verification code (M6.2). nil = email/password
+	// registration can't complete — an operator misconfiguration, not a
+	// normal dormant-feature state, since email/password signup has no
+	// fallback path.
+	otpMailer func(ctx context.Context, to, code string) error
+}
+
+// WithOTPMailer wires verification-code delivery for email/password signup.
+func (s *Service) WithOTPMailer(mailer func(ctx context.Context, to, code string) error) *Service {
+	s.otpMailer = mailer
+	return s
 }
 
 // WithSignupAllowlist restricts NEW account creation (register + Google
@@ -75,24 +91,78 @@ func NewService(repo *Repository, issuer *TokenIssuer, refreshStore *RefreshStor
 	return &Service{repo: repo, issuer: issuer, refreshStore: refreshStore, refreshTokenTTL: refreshTTL}
 }
 
-func (s *Service) Register(ctx context.Context, email, password string) (Tokens, error) {
+// Register creates an unverified account and emails it a one-time code; no
+// session is issued yet (M6.2 — email/password signup requires VerifyOTP to
+// complete, unlike Google sign-in which self-verifies). Registering again
+// for an email that's still pending verification just resets the password
+// and sends a fresh code, so a lost email or a mistyped password isn't a
+// dead end.
+func (s *Service) Register(ctx context.Context, email, password string) error {
 	allowed, err := s.signupAllowed(ctx, email)
 	if err != nil {
-		return Tokens{}, fmt.Errorf("check signup allowlist: %w", err)
+		return fmt.Errorf("check signup allowlist: %w", err)
 	}
 	if !allowed {
-		return Tokens{}, ErrSignupNotAllowed
+		return ErrSignupNotAllowed
 	}
 	if err := ValidatePasswordPolicy(password); err != nil {
-		return Tokens{}, err
+		return err
 	}
 	hash, err := HashPassword(password)
 	if err != nil {
-		return Tokens{}, fmt.Errorf("hash password: %w", err)
+		return fmt.Errorf("hash password: %w", err)
 	}
-	user, err := s.repo.CreateUser(ctx, email, hash)
+	user, err := s.repo.CreateOrReplaceUnverifiedUser(ctx, email, hash)
 	if err != nil {
-		return Tokens{}, err // may be ErrEmailAlreadyRegistered — caller maps to HTTP status
+		return err // may be ErrEmailAlreadyRegistered — caller maps to HTTP status
+	}
+	return s.sendOTP(ctx, user.Email, true) // bypass cooldown: see IssueOTPBypassingCooldown
+}
+
+// ResendOTP re-sends a verification code for an account still pending
+// verification. Rate-limited per-email (independent of the per-IP auth rate
+// limiter) via the repository's resend cooldown.
+func (s *Service) ResendOTP(ctx context.Context, email string) error {
+	user, err := s.repo.GetUserByEmail(ctx, email)
+	if err != nil {
+		return err // ErrUserNotFound if no account exists for this email
+	}
+	if user.EmailVerified {
+		return ErrEmailAlreadyRegistered // nothing pending — already verified
+	}
+	return s.sendOTP(ctx, user.Email, false) // respects cooldown: this IS the resend button
+}
+
+func (s *Service) sendOTP(ctx context.Context, email string, bypassCooldown bool) error {
+	if s.otpMailer == nil {
+		return fmt.Errorf("otp email delivery is not configured")
+	}
+	issue := s.repo.IssueOTP
+	if bypassCooldown {
+		issue = s.repo.IssueOTPBypassingCooldown
+	}
+	code, err := issue(ctx, email)
+	if err != nil {
+		return err // may be ErrOTPResendTooSoon
+	}
+	if err := s.otpMailer(ctx, email, code); err != nil {
+		return fmt.Errorf("send otp email: %w", err)
+	}
+	return nil
+}
+
+// VerifyOTP completes email/password registration: a correct, unexpired code
+// marks the account verified and issues a session, same as a normal login.
+func (s *Service) VerifyOTP(ctx context.Context, email, code string) (Tokens, error) {
+	if err := s.repo.VerifyOTP(ctx, email, code); err != nil {
+		return Tokens{}, err // ErrOTPInvalid / ErrOTPExpired
+	}
+	user, err := s.repo.GetUserByEmail(ctx, email)
+	if err != nil {
+		return Tokens{}, err
+	}
+	if err := s.repo.MarkEmailVerified(ctx, email); err != nil {
+		return Tokens{}, err
 	}
 	return s.issueTokens(ctx, user.ID)
 }
@@ -107,6 +177,9 @@ func (s *Service) Login(ctx context.Context, email, password string) (Tokens, er
 	}
 	if !VerifyPassword(user.PasswordHash, password) {
 		return Tokens{}, ErrInvalidCredentials
+	}
+	if !user.EmailVerified {
+		return Tokens{}, ErrEmailNotVerified
 	}
 	return s.issueTokens(ctx, user.ID)
 }
@@ -191,7 +264,7 @@ func Bootstrap(ctx context.Context, repo *Repository, email, password string) er
 	if err != nil {
 		return fmt.Errorf("hash bootstrap admin password: %w", err)
 	}
-	if _, err := repo.CreateUser(ctx, email, hash); err != nil {
+	if _, err := repo.CreateUser(ctx, email, hash, true); err != nil {
 		return fmt.Errorf("create bootstrap admin user: %w", err)
 	}
 	return nil

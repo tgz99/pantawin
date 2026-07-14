@@ -83,10 +83,17 @@ func run(logger *slog.Logger) error {
 	// admin (signup_allowlist table) or listed in SIGNUP_ALLOWLIST may create
 	// accounts. Existing accounts are unaffected.
 	teamRepo := team.NewRepository(pool)
+	// M6.2: email/password registration requires an OTP emailed through the
+	// same Postfix relay as alerts; Google sign-in skips it (self-verified).
+	otpMailer := func(ctx context.Context, to, code string) error {
+		subject, html := auth.RenderOTPEmail(code)
+		return notify.SendRaw(ctx, cfg.SMTPAddr, cfg.AlertFrom, []string{to}, subject, html)
+	}
 	authService := auth.NewService(authRepo, issuer, refreshStore, cfg.RefreshTokenTTL).
 		WithGoogleVerifier(auth.NewGoogleVerifier(cfg.GoogleClientID)).
 		WithSignupAllowlist(cfg.SignupAllowlist).
-		WithSignupAllowlistStore(teamRepo.Allowed)
+		WithSignupAllowlistStore(teamRepo.Allowed).
+		WithOTPMailer(otpMailer)
 	logger.Info("signup gated by team invites", "env_entries", len(cfg.SignupAllowlist))
 	if cfg.GoogleClientID != "" {
 		logger.Info("google sign-in enabled")

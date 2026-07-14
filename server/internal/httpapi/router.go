@@ -58,6 +58,8 @@ func NewRouter(deps RouterDeps) http.Handler {
 			// Spec section 8: rate limiting on auth endpoints (brute-force guard).
 			r.Use(rateLimit(deps.Redis, "auth", 10, time.Minute))
 			r.Post("/register", authH.register)
+			r.Post("/verify-otp", authH.verifyOTP)
+			r.Post("/resend-otp", authH.resendOTP)
 			r.Post("/login", authH.login)
 			r.Post("/refresh", authH.refresh)
 			r.Post("/google", authH.googleLogin)

@@ -26,6 +26,9 @@ type tokensResponse struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
+// register starts email/password signup: it does NOT return a session.
+// The account is unverified until verifyOTP succeeds (M6.2) — the client
+// must show a code-entry screen next.
 func (h *authHandlers) register(w http.ResponseWriter, r *http.Request) {
 	var req registerLoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -37,8 +40,7 @@ func (h *authHandlers) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokens, err := h.service.Register(r.Context(), req.Email, req.Password)
-	if err != nil {
+	if err := h.service.Register(r.Context(), req.Email, req.Password); err != nil {
 		switch {
 		case errors.Is(err, auth.ErrEmailAlreadyRegistered):
 			writeError(w, http.StatusConflict, "email already registered")
@@ -46,13 +48,82 @@ func (h *authHandlers) register(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "signup is not allowed for this email")
 		case errors.Is(err, auth.ErrWeakPassword):
 			writeError(w, http.StatusBadRequest, auth.ErrWeakPassword.Error())
+		case errors.Is(err, auth.ErrOTPResendTooSoon):
+			writeError(w, http.StatusTooManyRequests, auth.ErrOTPResendTooSoon.Error())
 		default:
 			writeError(w, http.StatusInternalServerError, "failed to register")
 		}
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, tokensResponse{AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken})
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "verification_required", "email": req.Email})
+}
+
+type otpEmailRequest struct {
+	Email string `json:"email"`
+}
+
+type verifyOTPRequest struct {
+	Email string `json:"email"`
+	Code  string `json:"code"`
+}
+
+// verifyOTP completes email/password registration and issues a session.
+func (h *authHandlers) verifyOTP(w http.ResponseWriter, r *http.Request) {
+	var req verifyOTPRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Email == "" || req.Code == "" {
+		writeError(w, http.StatusBadRequest, "email and code are required")
+		return
+	}
+
+	tokens, err := h.service.VerifyOTP(r.Context(), req.Email, req.Code)
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrOTPInvalid):
+			writeError(w, http.StatusBadRequest, auth.ErrOTPInvalid.Error())
+		case errors.Is(err, auth.ErrOTPExpired):
+			writeError(w, http.StatusBadRequest, auth.ErrOTPExpired.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, "failed to verify code")
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, tokensResponse{AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken})
+}
+
+// resendOTP re-sends the verification code for an account still pending
+// verification (lost email, expired code, etc).
+func (h *authHandlers) resendOTP(w http.ResponseWriter, r *http.Request) {
+	var req otpEmailRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Email == "" {
+		writeError(w, http.StatusBadRequest, "email is required")
+		return
+	}
+
+	if err := h.service.ResendOTP(r.Context(), req.Email); err != nil {
+		switch {
+		case errors.Is(err, auth.ErrUserNotFound):
+			writeError(w, http.StatusNotFound, "no pending registration for this email")
+		case errors.Is(err, auth.ErrEmailAlreadyRegistered):
+			writeError(w, http.StatusConflict, "this account is already verified — sign in instead")
+		case errors.Is(err, auth.ErrOTPResendTooSoon):
+			writeError(w, http.StatusTooManyRequests, auth.ErrOTPResendTooSoon.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, "failed to resend code")
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
 }
 
 func (h *authHandlers) login(w http.ResponseWriter, r *http.Request) {
@@ -64,11 +135,17 @@ func (h *authHandlers) login(w http.ResponseWriter, r *http.Request) {
 
 	tokens, err := h.service.Login(r.Context(), req.Email, req.Password)
 	if err != nil {
-		if errors.Is(err, auth.ErrInvalidCredentials) {
+		switch {
+		case errors.Is(err, auth.ErrInvalidCredentials):
 			writeError(w, http.StatusUnauthorized, "invalid email or password")
-			return
+		case errors.Is(err, auth.ErrEmailNotVerified):
+			// 428 Precondition Required: distinct from bad credentials so the
+			// client can route straight to the OTP screen instead of showing
+			// a generic login error.
+			writeError(w, http.StatusPreconditionRequired, "please verify your email before signing in")
+		default:
+			writeError(w, http.StatusInternalServerError, "failed to log in")
 		}
-		writeError(w, http.StatusInternalServerError, "failed to log in")
 		return
 	}
 

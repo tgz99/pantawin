@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -121,6 +122,30 @@ type testEnv struct {
 	issuer      *auth.TokenIssuer
 	publisher   *realtime.Publisher
 	adminID     int64 // only set by newGatedTestEnv
+	otp         *otpCapture
+}
+
+// otpCapture stands in for the real SMTP-backed OTP mailer (M6.2): tests
+// can't receive real email, so this records the last code sent to each
+// address and testEnv.register() reads it back to complete verification.
+type otpCapture struct {
+	mu    sync.Mutex
+	codes map[string]string
+}
+
+func newOTPCapture() *otpCapture { return &otpCapture{codes: map[string]string{}} }
+
+func (c *otpCapture) mailer(_ context.Context, to, code string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.codes[to] = code
+	return nil
+}
+
+func (c *otpCapture) last(email string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.codes[email]
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -157,7 +182,10 @@ func buildTestEnv(t *testing.T, gated bool) *testEnv {
 	redisClient := redis.NewClient(&redis.Options{Addr: redisAddr})
 	t.Cleanup(func() { _ = redisClient.Close() })
 
-	authRepo := auth.NewRepository(pool)
+	// Short resend cooldown so a dedicated test can sleep past it instead of
+	// waiting out the real 60s production default; TTL stays generous so
+	// slow CI runs don't expire a code mid-test.
+	authRepo := auth.NewRepository(pool).WithOTPTuning(2*time.Minute, 300*time.Millisecond)
 	issuer := auth.NewTokenIssuer("test-secret", 15*time.Minute, 30*24*time.Hour)
 	refreshStore := auth.NewRefreshStore(pool)
 	// Fake Google verifier: token "google-ok:<email>" verifies as that email.
@@ -167,8 +195,10 @@ func buildTestEnv(t *testing.T, gated bool) *testEnv {
 		}
 		return auth.GoogleIdentity{}, auth.ErrGoogleTokenInvalid
 	}
+	otp := newOTPCapture()
 	authService := auth.NewService(authRepo, issuer, refreshStore, 30*24*time.Hour).
-		WithGoogleVerifier(fakeGoogle)
+		WithGoogleVerifier(fakeGoogle).
+		WithOTPMailer(otp.mailer)
 
 	teamRepo := team.NewRepository(pool)
 	var adminID int64
@@ -178,7 +208,7 @@ func buildTestEnv(t *testing.T, gated bool) *testEnv {
 		if err != nil {
 			t.Fatalf("hash admin password: %v", err)
 		}
-		admin, err := authRepo.CreateUser(ctx, "admin@pantawin.test", hash)
+		admin, err := authRepo.CreateUser(ctx, "admin@pantawin.test", hash, true)
 		if err != nil {
 			t.Fatalf("create admin user: %v", err)
 		}
@@ -220,7 +250,7 @@ func buildTestEnv(t *testing.T, gated bool) *testEnv {
 	return &testEnv{
 		server: server, pool: pool, redisClient: redisClient,
 		monitorRepo: monitorRepo, sched: sched, issuer: issuer, publisher: publisher,
-		adminID: adminID,
+		adminID: adminID, otp: otp,
 	}
 }
 
@@ -229,6 +259,11 @@ type tokens struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
+// register performs the full email/password signup flow (M6.2): register,
+// then verify with the code the fake mailer captured, exactly as the app
+// does after showing its OTP-entry screen. Callers get a logged-in session
+// as before — the two-step dance is transparent to the ~15 existing tests
+// that just want a registered, authenticated user.
 func (e *testEnv) register(t *testing.T, email, password string) tokens {
 	t.Helper()
 	body := fmt.Sprintf(`{"email":%q,"password":%q}`, email, password)
@@ -236,13 +271,27 @@ func (e *testEnv) register(t *testing.T, email, password string) tokens {
 	if err != nil {
 		t.Fatalf("register request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("expected 201 from register, got %d", resp.StatusCode)
 	}
+
+	code := e.otp.last(email)
+	if code == "" {
+		t.Fatalf("no otp captured for %s", email)
+	}
+	verifyBody := fmt.Sprintf(`{"email":%q,"code":%q}`, email, code)
+	vResp, err := http.Post(e.server.URL+"/v1/auth/verify-otp", "application/json", strings.NewReader(verifyBody))
+	if err != nil {
+		t.Fatalf("verify-otp request failed: %v", err)
+	}
+	defer vResp.Body.Close()
+	if vResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from verify-otp, got %d", vResp.StatusCode)
+	}
 	var tk tokens
-	if err := json.NewDecoder(resp.Body).Decode(&tk); err != nil {
-		t.Fatalf("failed to decode register response: %v", err)
+	if err := json.NewDecoder(vResp.Body).Decode(&tk); err != nil {
+		t.Fatalf("failed to decode verify-otp response: %v", err)
 	}
 	return tk
 }
