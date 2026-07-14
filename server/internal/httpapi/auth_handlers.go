@@ -39,11 +39,16 @@ func (h *authHandlers) register(w http.ResponseWriter, r *http.Request) {
 
 	tokens, err := h.service.Register(r.Context(), req.Email, req.Password)
 	if err != nil {
-		if errors.Is(err, auth.ErrEmailAlreadyRegistered) {
+		switch {
+		case errors.Is(err, auth.ErrEmailAlreadyRegistered):
 			writeError(w, http.StatusConflict, "email already registered")
-			return
+		case errors.Is(err, auth.ErrSignupNotAllowed):
+			writeError(w, http.StatusForbidden, "signup is not allowed for this email")
+		case errors.Is(err, auth.ErrWeakPassword):
+			writeError(w, http.StatusBadRequest, auth.ErrWeakPassword.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, "failed to register")
 		}
-		writeError(w, http.StatusInternalServerError, "failed to register")
 		return
 	}
 
@@ -94,6 +99,8 @@ func (h *authHandlers) googleLogin(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotImplemented, "google sign-in is not configured")
 		case errors.Is(err, auth.ErrGoogleTokenInvalid):
 			writeError(w, http.StatusUnauthorized, "invalid google id token")
+		case errors.Is(err, auth.ErrSignupNotAllowed):
+			writeError(w, http.StatusForbidden, "signup is not allowed for this email")
 		default:
 			writeError(w, http.StatusInternalServerError, "failed to sign in with google")
 		}

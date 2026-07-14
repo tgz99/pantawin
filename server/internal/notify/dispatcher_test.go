@@ -104,7 +104,7 @@ func TestDispatcher_ExactlyOncePerTransition(t *testing.T) {
 	capture := &captureChannel{name: "email"}
 	dispatcher := notify.NewDispatcher(pool, rdb, []notify.AlertChannel{capture},
 		func(ctx context.Context, mID int64) (notify.ChannelTarget, []string, error) {
-			return notify.ChannelTarget{Email: "t@t.test"}, []string{"email"}, nil
+			return notify.ChannelTarget{Emails: []string{"t@t.test"}}, []string{"email"}, nil
 		}, slog.Default())
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -189,7 +189,7 @@ func TestDispatcher_PushAndEmailBothFireOnce(t *testing.T) {
 	push := &captureChannel{name: "push"}
 	dispatcher := notify.NewDispatcher(pool, rdb, []notify.AlertChannel{email, push},
 		func(ctx context.Context, mID int64) (notify.ChannelTarget, []string, error) {
-			return notify.ChannelTarget{Email: "t@t.test"}, []string{"email", "push"}, nil
+			return notify.ChannelTarget{Emails: []string{"t@t.test"}}, []string{"email", "push"}, nil
 		}, slog.Default())
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -296,7 +296,7 @@ func TestDispatcher_RetriesFailedSendsBounded(t *testing.T) {
 	push := &flakyChannel{captureChannel: captureChannel{name: "push"}, failFirst: 999} // never succeeds
 	dispatcher := notify.NewDispatcher(pool, rdb, []notify.AlertChannel{email, push},
 		func(ctx context.Context, mID int64) (notify.ChannelTarget, []string, error) {
-			return notify.ChannelTarget{Email: "t@t.test"}, []string{"email", "push"}, nil
+			return notify.ChannelTarget{Emails: []string{"t@t.test"}}, []string{"email", "push"}, nil
 		}, slog.Default()).
 		// Shrink the cadence so the 1m/4m/16m production backoff becomes
 		// 50ms/200ms/800ms and the whole schedule fits in a test run.

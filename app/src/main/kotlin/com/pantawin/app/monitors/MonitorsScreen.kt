@@ -20,10 +20,12 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.MonitorHeart
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Pause
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.DropdownMenu
@@ -149,6 +151,10 @@ fun MonitorsScreen(
                             icon = Icons.Filled.MonitorHeart,
                         )
                     } else {
+                        // M6: two sections — personal (owner-only) first, then
+                        // team (shared with every user).
+                        val personal = s.monitors.filter { it.scope != "team" }
+                        val team = s.monitors.filter { it.scope == "team" }
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = androidx.compose.foundation.layout.PaddingValues(
@@ -157,7 +163,32 @@ fun MonitorsScreen(
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
                             item(key = "summary") { StatusSummaryCard(s.monitors) }
-                            items(s.monitors, key = { it.id }) { m ->
+                            item(key = "header-personal") {
+                                SectionHeader("Personal", Icons.Outlined.Person)
+                            }
+                            if (personal.isEmpty()) {
+                                item(key = "empty-personal") {
+                                    SectionHint("No personal monitors yet — only you would see them.")
+                                }
+                            }
+                            items(personal, key = { it.id }) { m ->
+                                MonitorCard(
+                                    monitor = m,
+                                    onOpen = { onOpen(m.id) },
+                                    onPause = { viewModel.pause(m.id) },
+                                    onResume = { viewModel.resume(m.id) },
+                                    onDelete = { viewModel.delete(m.id) },
+                                )
+                            }
+                            item(key = "header-team") {
+                                SectionHeader("Team", Icons.Outlined.Groups)
+                            }
+                            if (team.isEmpty()) {
+                                item(key = "empty-team") {
+                                    SectionHint("No team monitors yet — everyone sees these and gets their alerts.")
+                                }
+                            }
+                            items(team, key = { it.id }) { m ->
                                 MonitorCard(
                                     monitor = m,
                                     onOpen = { onOpen(m.id) },
@@ -222,6 +253,39 @@ private fun StatusSummaryCard(monitors: List<MonitorStatus>) {
             }
         }
     }
+}
+
+// M6 section headers: Personal (owner-only) vs Team (shared) monitors.
+@Composable
+private fun SectionHeader(title: String, icon: ImageVector) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(top = 8.dp),
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp),
+        )
+        Text(
+            title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(start = 8.dp),
+        )
+    }
+}
+
+@Composable
+private fun SectionHint(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 4.dp),
+    )
 }
 
 @Composable

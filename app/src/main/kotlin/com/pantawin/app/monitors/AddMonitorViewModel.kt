@@ -20,7 +20,13 @@ class AddMonitorViewModel(private val gateway: MonitorGateway) : ViewModel() {
     private val _state = MutableStateFlow(AddMonitorState())
     val state: StateFlow<AddMonitorState> = _state.asStateFlow()
 
-    fun submit(name: String, url: String, intervalSeconds: Int, channels: List<String> = listOf("email", "push")) {
+    fun submit(
+        name: String,
+        url: String,
+        intervalSeconds: Int,
+        channels: List<String> = listOf("email", "push"),
+        scope: String = "personal",
+    ) {
         // Client-side pre-check for fast feedback; the server's SSRF guard is
         // the actual authority.
         val trimmedUrl = url.trim()
@@ -41,6 +47,7 @@ class AddMonitorViewModel(private val gateway: MonitorGateway) : ViewModel() {
                         url = trimmedUrl,
                         intervalSeconds = intervalSeconds,
                         alertChannels = channels,
+                        scope = scope,
                     ),
                 )
             }.onSuccess {

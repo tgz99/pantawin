@@ -29,9 +29,11 @@ type IncidentEvent struct {
 	DeepLink     string        // pantawin://monitor/{id}
 }
 
-// ChannelTarget is where a channel delivers — for email, the address.
+// ChannelTarget is where a channel delivers — for email, the addresses.
+// Personal monitors carry one address; team monitors (M6) carry every
+// registered user's.
 type ChannelTarget struct {
-	Email string
+	Emails []string
 }
 
 // AlertChannel is the pluggable delivery abstraction (spec 3.2b).

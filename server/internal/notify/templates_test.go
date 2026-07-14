@@ -82,10 +82,10 @@ func TestHumanizeDuration(t *testing.T) {
 }
 
 func TestBuildMIME_HasHTMLContentType(t *testing.T) {
-	msg := string(buildMIME("alerts@pantawin.gratisaja.com", "user@example.com", "Subj", "<b>hi</b>"))
+	msg := string(buildMIME("alerts@pantawin.gratisaja.com", []string{"user@example.com", "mate@example.com"}, "Subj", "<b>hi</b>"))
 	for _, want := range []string{
 		"From: Pantawin <alerts@pantawin.gratisaja.com>",
-		"To: user@example.com",
+		"To: user@example.com, mate@example.com",
 		"Subject: Subj",
 		"Content-Type: text/html; charset=UTF-8",
 		"<b>hi</b>",

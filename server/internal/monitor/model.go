@@ -18,6 +18,17 @@ const (
 	StatusPending Status = "PENDING"
 )
 
+// Scope (M6): personal monitors belong to their owner; team monitors are
+// visible to every user and alert the whole team. There is one implicit
+// team — all registered users — so gate registration (SIGNUP_ALLOWLIST)
+// when team monitors are in use.
+const (
+	ScopePersonal = "personal"
+	ScopeTeam     = "team"
+)
+
+func ValidScope(s string) bool { return s == ScopePersonal || s == ScopeTeam }
+
 type Monitor struct {
 	ID                 int64
 	UserID             int64
@@ -32,6 +43,7 @@ type Monitor struct {
 	Status             Status
 	ConsecutiveFailures int
 	AlertChannels      []string
+	Scope              string
 	CreatedAt          time.Time
 }
 
@@ -41,6 +53,7 @@ type StatusView struct {
 	Name           string     `json:"name"`
 	URL            string     `json:"url"`
 	Status         Status     `json:"status"`
+	Scope          string     `json:"scope"`
 	LastCheckedAt  *time.Time `json:"last_checked_at"`
 	ResponseTimeMS *int       `json:"response_time_ms"`
 }

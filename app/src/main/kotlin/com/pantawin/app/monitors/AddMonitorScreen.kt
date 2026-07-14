@@ -12,14 +12,19 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Email
+import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.Label
 import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -53,6 +58,7 @@ fun AddMonitorScreen(
     var interval by remember { mutableStateOf("60") }
     var emailAlerts by remember { mutableStateOf(true) }
     var pushAlerts by remember { mutableStateOf(true) }
+    var teamScope by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.done) {
         if (state.done) onDone()
@@ -103,6 +109,39 @@ fun AddMonitorScreen(
             )
 
             Text(
+                "Section",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 20.dp, bottom = 8.dp),
+            )
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                SegmentedButton(
+                    selected = !teamScope,
+                    onClick = { teamScope = false },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    icon = { Icon(Icons.Outlined.Person, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    label = { Text("Personal") },
+                )
+                SegmentedButton(
+                    selected = teamScope,
+                    onClick = { teamScope = true },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    icon = { Icon(Icons.Outlined.Groups, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    label = { Text("Team") },
+                )
+            }
+            Text(
+                if (teamScope) {
+                    "Shared: every team member sees this monitor and gets its alerts."
+                } else {
+                    "Private: only you see this monitor and get its alerts."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+
+            Text(
                 "Alert me via",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -137,6 +176,7 @@ fun AddMonitorScreen(
                             if (emailAlerts) add("email")
                             if (pushAlerts) add("push")
                         },
+                        scope = if (teamScope) "team" else "personal",
                     )
                 },
                 enabled = !state.submitting,

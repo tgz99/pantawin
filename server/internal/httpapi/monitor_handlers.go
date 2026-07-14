@@ -36,6 +36,7 @@ type monitorRequest struct {
 	ExpectedStatusMax *int      `json:"expected_status_max"`
 	FailureThreshold  *int      `json:"failure_threshold"`
 	AlertChannels     *[]string `json:"alert_channels"`
+	Scope             *string   `json:"scope"` // "personal" (default) | "team"
 }
 
 type monitorResponse struct {
@@ -49,6 +50,7 @@ type monitorResponse struct {
 	ExpectedStatusMax int            `json:"expected_status_max"`
 	FailureThreshold  int            `json:"failure_threshold"`
 	AlertChannels     []string       `json:"alert_channels"`
+	Scope             string         `json:"scope"`
 	Status            monitor.Status `json:"status"`
 	CreatedAt         time.Time      `json:"created_at"`
 }
@@ -59,7 +61,7 @@ func toMonitorResponse(m monitor.Monitor) monitorResponse {
 		IntervalSeconds: m.IntervalSeconds, TimeoutMS: m.TimeoutMS,
 		ExpectedStatusMin: m.ExpectedStatusMin, ExpectedStatusMax: m.ExpectedStatusMax,
 		FailureThreshold: m.FailureThreshold, AlertChannels: m.AlertChannels,
-		Status: m.Status, CreatedAt: m.CreatedAt,
+		Scope: m.Scope, Status: m.Status, CreatedAt: m.CreatedAt,
 	}
 }
 
@@ -156,6 +158,12 @@ func (h *monitorHandlers) validateAndApplyDefaults(ctx context.Context, req moni
 			return p, "alert_channels must be a non-empty subset of [email, push]"
 		}
 		p.AlertChannels = *req.AlertChannels
+	}
+	if req.Scope != nil {
+		if !monitor.ValidScope(*req.Scope) {
+			return p, "scope must be personal or team"
+		}
+		p.Scope = *req.Scope
 	}
 	return p, ""
 }
@@ -273,12 +281,17 @@ func (h *monitorHandlers) updateMonitor(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "alert_channels must be a non-empty subset of [email, push]")
 		return
 	}
+	if req.Scope != nil && !monitor.ValidScope(*req.Scope) {
+		writeError(w, http.StatusBadRequest, "scope must be personal or team")
+		return
+	}
 
 	m, err := h.repo.Update(r.Context(), userID, id, monitor.UpdateParams{
 		Name: req.Name, URL: req.URL, Method: req.Method,
 		IntervalSeconds: req.IntervalSeconds, TimeoutMS: req.TimeoutMS,
 		ExpectedStatusMin: req.ExpectedStatusMin, ExpectedStatusMax: req.ExpectedStatusMax,
 		FailureThreshold: req.FailureThreshold, AlertChannels: req.AlertChannels,
+		Scope: req.Scope,
 	})
 	if err != nil {
 		if errors.Is(err, monitor.ErrNotFound) {

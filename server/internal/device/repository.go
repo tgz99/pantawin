@@ -56,6 +56,27 @@ func (r *Repository) TokensForUser(ctx context.Context, userID int64) ([]string,
 	return tokens, rows.Err()
 }
 
+// AllTokens returns every registered FCM token across all users — team
+// monitors (M6) push to the whole team. DISTINCT because the same physical
+// device re-registered under another account must not be notified twice.
+func (r *Repository) AllTokens(ctx context.Context) ([]string, error) {
+	rows, err := r.pool.Query(ctx, `SELECT DISTINCT fcm_token FROM devices`)
+	if err != nil {
+		return nil, fmt.Errorf("query all device tokens: %w", err)
+	}
+	defer rows.Close()
+
+	var tokens []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, t)
+	}
+	return tokens, rows.Err()
+}
+
 // Delete removes a token — called when FCM reports it as unregistered/stale.
 func (r *Repository) Delete(ctx context.Context, fcmToken string) error {
 	_, err := r.pool.Exec(ctx, `DELETE FROM devices WHERE fcm_token = $1`, fcmToken)

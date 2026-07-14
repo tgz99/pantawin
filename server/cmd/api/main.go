@@ -79,7 +79,13 @@ func run(logger *slog.Logger) error {
 	issuer := auth.NewTokenIssuer(cfg.JWTSecret, cfg.AccessTokenTTL, cfg.RefreshTokenTTL)
 	refreshStore := auth.NewRefreshStore(pool)
 	authService := auth.NewService(authRepo, issuer, refreshStore, cfg.RefreshTokenTTL).
-		WithGoogleVerifier(auth.NewGoogleVerifier(cfg.GoogleClientID))
+		WithGoogleVerifier(auth.NewGoogleVerifier(cfg.GoogleClientID)).
+		WithSignupAllowlist(cfg.SignupAllowlist)
+	if len(cfg.SignupAllowlist) > 0 {
+		logger.Info("signup restricted to allowlist", "entries", len(cfg.SignupAllowlist))
+	} else {
+		logger.Warn("signup is OPEN — set SIGNUP_ALLOWLIST before using team monitors")
+	}
 	if cfg.GoogleClientID != "" {
 		logger.Info("google sign-in enabled")
 	} else {
@@ -114,6 +120,11 @@ func run(logger *slog.Logger) error {
 			if err != nil {
 				return 0, nil, err
 			}
+			// Team monitors (M6) push to every registered device.
+			if m.Scope == monitor.ScopeTeam {
+				tokens, err := deviceRepo.AllTokens(ctx)
+				return m.UserID, tokens, err
+			}
 			tokens, err := deviceRepo.TokensForUser(ctx, m.UserID)
 			return m.UserID, tokens, err
 		},
@@ -132,8 +143,8 @@ func run(logger *slog.Logger) error {
 	dispatcher := notify.NewDispatcher(
 		pool, redisClient, channels,
 		func(ctx context.Context, monitorID int64) (notify.ChannelTarget, []string, error) {
-			ch, email, err := monitorRepo.AlertConfig(ctx, monitorID)
-			return notify.ChannelTarget{Email: email}, ch, err
+			ch, emails, err := monitorRepo.AlertConfig(ctx, monitorID)
+			return notify.ChannelTarget{Emails: emails}, ch, err
 		},
 		logger,
 	)
@@ -276,9 +287,18 @@ func publishStatus(ctx context.Context, publisher *realtime.Publisher, m monitor
 		Type: "status", MonitorID: m.ID, MonitorName: m.Name,
 		Status: status, ResponseTimeMS: rt, At: time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := publisher.Publish(ctx, m.UserID, evt); err != nil {
+	if err := publishForScope(ctx, publisher, m, evt); err != nil {
 		logger.Debug("realtime: failed to publish status", "monitor_id", m.ID, "error", err)
 	}
+}
+
+// publishForScope routes an event to the owner's feed for personal monitors
+// or the shared team feed for team monitors (M6).
+func publishForScope(ctx context.Context, publisher *realtime.Publisher, m monitor.Monitor, evt realtime.Event) error {
+	if m.Scope == monitor.ScopeTeam {
+		return publisher.PublishTeam(ctx, evt)
+	}
+	return publisher.Publish(ctx, m.UserID, evt)
 }
 
 func publishIncident(ctx context.Context, publisher *realtime.Publisher, m monitor.Monitor, incidentEvent string, logger *slog.Logger) {
@@ -290,7 +310,7 @@ func publishIncident(ctx context.Context, publisher *realtime.Publisher, m monit
 		Type: "incident", MonitorID: m.ID, MonitorName: m.Name,
 		Status: status, IncidentEvent: incidentEvent, At: time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := publisher.Publish(ctx, m.UserID, evt); err != nil {
+	if err := publishForScope(ctx, publisher, m, evt); err != nil {
 		logger.Debug("realtime: failed to publish incident", "monitor_id", m.ID, "error", err)
 	}
 }

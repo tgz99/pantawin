@@ -41,7 +41,9 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, userID int64) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	sub := h.redis.Subscribe(ctx, userChannel(userID))
+	// Team-monitor events are broadcast on a shared channel (M6) — every
+	// dashboard sees them alongside its own personal-monitor events.
+	sub := h.redis.Subscribe(ctx, userChannel(userID), teamChannel)
 	defer sub.Close()
 	ch := sub.Channel()
 

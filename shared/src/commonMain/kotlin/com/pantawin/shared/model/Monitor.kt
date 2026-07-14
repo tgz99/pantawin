@@ -16,6 +16,9 @@ data class Monitor(
     @SerialName("expected_status_max") val expectedStatusMax: Int,
     @SerialName("failure_threshold") val failureThreshold: Int,
     val status: MonitorState,
+    // "personal" (owner-only) or "team" (shared with every user, M6).
+    // Defaults keep decoding compatible with pre-M6 servers.
+    val scope: String = "personal",
     @SerialName("created_at") val createdAt: String,
 )
 
@@ -31,4 +34,6 @@ data class MonitorInput(
     @SerialName("failure_threshold") val failureThreshold: Int? = null,
     // Subset of ["email", "push"] (M3 per-monitor channel toggle).
     @SerialName("alert_channels") val alertChannels: List<String>? = null,
+    // "personal" or "team" (M6); null = server default (personal).
+    val scope: String? = null,
 )

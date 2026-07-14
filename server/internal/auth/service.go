@@ -4,10 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
 var ErrInvalidCredentials = errors.New("invalid email or password")
+
+// ErrSignupNotAllowed rejects account creation for emails outside the
+// configured allowlist (M6 — team monitors are visible to every account, so
+// account creation must be gated once a team uses them).
+var ErrSignupNotAllowed = errors.New("signup is not allowed for this email")
 
 type Tokens struct {
 	AccessToken  string
@@ -20,6 +26,37 @@ type Service struct {
 	refreshStore    *RefreshStore
 	refreshTokenTTL time.Duration
 	googleVerify    GoogleVerifier // nil = Google sign-in dormant
+	signupAllowlist []string       // empty = open signup (pre-M6 behavior)
+}
+
+// WithSignupAllowlist restricts NEW account creation (register + Google
+// find-or-create) to the given entries: exact emails ("a@b.com") or whole
+// domains ("@b.com"). Existing accounts always keep working. Empty list =
+// signup stays open.
+func (s *Service) WithSignupAllowlist(entries []string) *Service {
+	s.signupAllowlist = entries
+	return s
+}
+
+func (s *Service) signupAllowed(email string) bool {
+	if len(s.signupAllowlist) == 0 {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(email))
+	for _, entry := range s.signupAllowlist {
+		entry = strings.ToLower(strings.TrimSpace(entry))
+		if entry == "" {
+			continue
+		}
+		if strings.HasPrefix(entry, "@") {
+			if strings.HasSuffix(lower, entry) {
+				return true
+			}
+		} else if lower == entry {
+			return true
+		}
+	}
+	return false
 }
 
 func NewService(repo *Repository, issuer *TokenIssuer, refreshStore *RefreshStore, refreshTTL time.Duration) *Service {
@@ -27,6 +64,9 @@ func NewService(repo *Repository, issuer *TokenIssuer, refreshStore *RefreshStor
 }
 
 func (s *Service) Register(ctx context.Context, email, password string) (Tokens, error) {
+	if !s.signupAllowed(email) {
+		return Tokens{}, ErrSignupNotAllowed
+	}
 	if err := ValidatePasswordPolicy(password); err != nil {
 		return Tokens{}, err
 	}

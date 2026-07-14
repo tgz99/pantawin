@@ -31,14 +31,8 @@ func (r *Repository) SeedMonitor(ctx context.Context, userID int64, name, url st
 	if err := r.pool.QueryRow(ctx, `
 		INSERT INTO monitors (user_id, name, url)
 		VALUES ($1, $2, $3)
-		RETURNING id, user_id, name, url, method, interval_seconds, timeout_ms,
-		          expected_status_min, expected_status_max, failure_threshold,
-		          status, consecutive_failures, created_at, alert_channels
-	`, userID, name, url).Scan(
-		&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
-		&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
-		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels,
-	); err != nil {
+		RETURNING `+monitorColumns+`
+	`, userID, name, url).Scan(m.scanFields()...); err != nil {
 		return Monitor{}, fmt.Errorf("insert seed monitor: %w", err)
 	}
 	return m, nil
@@ -47,28 +41,22 @@ func (r *Repository) SeedMonitor(ctx context.Context, userID int64, name, url st
 func (r *Repository) findByURL(ctx context.Context, userID int64, url string) (Monitor, error) {
 	var m Monitor
 	err := r.pool.QueryRow(ctx, `
-		SELECT id, user_id, name, url, method, interval_seconds, timeout_ms,
-		       expected_status_min, expected_status_max, failure_threshold,
-		       status, consecutive_failures, created_at, alert_channels
+		SELECT `+monitorColumns+`
 		FROM monitors WHERE user_id = $1 AND url = $2
 		LIMIT 1
-	`, userID, url).Scan(
-		&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
-		&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
-		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels,
-	)
+	`, userID, url).Scan(m.scanFields()...)
 	if err != nil {
 		return Monitor{}, err
 	}
 	return m, nil
 }
 
+// ListForUser returns every monitor the user can access: their personal
+// monitors plus all team-scoped ones (M6).
 func (r *Repository) ListForUser(ctx context.Context, userID int64) ([]Monitor, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, user_id, name, url, method, interval_seconds, timeout_ms,
-		       expected_status_min, expected_status_max, failure_threshold,
-		       status, consecutive_failures, created_at, alert_channels
-		FROM monitors WHERE user_id = $1
+		SELECT `+monitorColumns+`
+		FROM monitors WHERE user_id = $1 OR scope = 'team'
 		ORDER BY id
 	`, userID)
 	if err != nil {
@@ -79,11 +67,7 @@ func (r *Repository) ListForUser(ctx context.Context, userID int64) ([]Monitor, 
 	var monitors []Monitor
 	for rows.Next() {
 		var m Monitor
-		if err := rows.Scan(
-			&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
-			&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
-			&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels,
-		); err != nil {
+		if err := rows.Scan(m.scanFields()...); err != nil {
 			return nil, fmt.Errorf("scan monitor row: %w", err)
 		}
 		monitors = append(monitors, m)
@@ -92,38 +76,48 @@ func (r *Repository) ListForUser(ctx context.Context, userID int64) ([]Monitor, 
 }
 
 // AlertConfig resolves how a monitor should be alerted: its enabled channels
-// and the destination email (per-monitor override, else the owner's account
-// email). Used by the notification dispatcher.
-func (r *Repository) AlertConfig(ctx context.Context, monitorID int64) (channels []string, email string, err error) {
+// and the destination emails. A per-monitor override wins outright; otherwise
+// personal monitors alert the owner and team monitors alert every registered
+// user (M6). Used by the notification dispatcher.
+func (r *Repository) AlertConfig(ctx context.Context, monitorID int64) (channels []string, emails []string, err error) {
 	var override *string
-	var ownerEmail string
+	var ownerEmail, scope string
 	err = r.pool.QueryRow(ctx, `
-		SELECT m.alert_channels, m.alert_email, u.email
+		SELECT m.alert_channels, m.alert_email, m.scope, u.email
 		FROM monitors m JOIN users u ON u.id = m.user_id
 		WHERE m.id = $1
-	`, monitorID).Scan(&channels, &override, &ownerEmail)
+	`, monitorID).Scan(&channels, &override, &scope, &ownerEmail)
 	if err != nil {
-		return nil, "", fmt.Errorf("load alert config: %w", err)
+		return nil, nil, fmt.Errorf("load alert config: %w", err)
 	}
-	email = ownerEmail
 	if override != nil && *override != "" {
-		email = *override
+		return channels, []string{*override}, nil
 	}
-	return channels, email, nil
+	if scope != ScopeTeam {
+		return channels, []string{ownerEmail}, nil
+	}
+
+	rows, err := r.pool.Query(ctx, `SELECT email FROM users ORDER BY id`)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load team emails: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var e string
+		if err := rows.Scan(&e); err != nil {
+			return nil, nil, fmt.Errorf("scan team email: %w", err)
+		}
+		emails = append(emails, e)
+	}
+	return channels, emails, rows.Err()
 }
 
 func (r *Repository) GetByID(ctx context.Context, id int64) (Monitor, error) {
 	var m Monitor
 	err := r.pool.QueryRow(ctx, `
-		SELECT id, user_id, name, url, method, interval_seconds, timeout_ms,
-		       expected_status_min, expected_status_max, failure_threshold,
-		       status, consecutive_failures, created_at, alert_channels
+		SELECT `+monitorColumns+`
 		FROM monitors WHERE id = $1
-	`, id).Scan(
-		&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
-		&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
-		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels,
-	)
+	`, id).Scan(m.scanFields()...)
 	if err != nil {
 		return Monitor{}, fmt.Errorf("get monitor by id: %w", err)
 	}
@@ -132,9 +126,7 @@ func (r *Repository) GetByID(ctx context.Context, id int64) (Monitor, error) {
 
 func (r *Repository) ListAll(ctx context.Context) ([]Monitor, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, user_id, name, url, method, interval_seconds, timeout_ms,
-		       expected_status_min, expected_status_max, failure_threshold,
-		       status, consecutive_failures, created_at, alert_channels
+		SELECT `+monitorColumns+`
 		FROM monitors
 		WHERE status != 'PAUSED'
 		ORDER BY id
@@ -147,11 +139,7 @@ func (r *Repository) ListAll(ctx context.Context) ([]Monitor, error) {
 	var monitors []Monitor
 	for rows.Next() {
 		var m Monitor
-		if err := rows.Scan(
-			&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
-			&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
-			&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels,
-		); err != nil {
+		if err := rows.Scan(m.scanFields()...); err != nil {
 			return nil, fmt.Errorf("scan monitor row: %w", err)
 		}
 		monitors = append(monitors, m)
@@ -221,11 +209,12 @@ func (r *Repository) RecordCheck(ctx context.Context, monitorID int64, result ch
 	return CheckOutcome{Transitioned: transitioned, From: current, To: next.Status}, nil
 }
 
-// StatusViews returns the API-facing view for each of the user's monitors,
-// including the most recent check result if one exists.
+// StatusViews returns the API-facing view for each monitor the user can
+// access (personal + team, M6), including the most recent check result if
+// one exists.
 func (r *Repository) StatusViews(ctx context.Context, userID int64) ([]StatusView, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT m.id, m.name, m.url, m.status, lc.checked_at, lc.response_time_ms
+		SELECT m.id, m.name, m.url, m.status, m.scope, lc.checked_at, lc.response_time_ms
 		FROM monitors m
 		LEFT JOIN LATERAL (
 			SELECT checked_at, response_time_ms
@@ -234,7 +223,7 @@ func (r *Repository) StatusViews(ctx context.Context, userID int64) ([]StatusVie
 			ORDER BY cr.checked_at DESC
 			LIMIT 1
 		) lc ON true
-		WHERE m.user_id = $1
+		WHERE m.user_id = $1 OR m.scope = 'team'
 		ORDER BY m.id
 	`, userID)
 	if err != nil {
@@ -245,7 +234,7 @@ func (r *Repository) StatusViews(ctx context.Context, userID int64) ([]StatusVie
 	var views []StatusView
 	for rows.Next() {
 		var v StatusView
-		if err := rows.Scan(&v.ID, &v.Name, &v.URL, &v.Status, &v.LastCheckedAt, &v.ResponseTimeMS); err != nil {
+		if err := rows.Scan(&v.ID, &v.Name, &v.URL, &v.Status, &v.Scope, &v.LastCheckedAt, &v.ResponseTimeMS); err != nil {
 			return nil, fmt.Errorf("scan status view: %w", err)
 		}
 		views = append(views, v)

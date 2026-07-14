@@ -71,6 +71,11 @@ func (s *Service) GoogleLogin(ctx context.Context, rawIDToken string) (Tokens, e
 
 	user, err := s.repo.GetUserByEmail(ctx, identity.Email)
 	if errors.Is(err, ErrUserNotFound) {
+		// The allowlist gates only NEW accounts — existing users (however
+		// they registered) can always sign in with Google.
+		if !s.signupAllowed(identity.Email) {
+			return Tokens{}, ErrSignupNotAllowed
+		}
 		hash, hashErr := HashPassword(randomPassword())
 		if hashErr != nil {
 			return Tokens{}, fmt.Errorf("hash placeholder password: %w", hashErr)

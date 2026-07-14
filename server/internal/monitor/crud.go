@@ -19,7 +19,24 @@ const MaxMonitorsPerUser = 50
 
 const monitorColumns = `id, user_id, name, url, method, interval_seconds, timeout_ms,
 	expected_status_min, expected_status_max, failure_threshold,
-	status, consecutive_failures, created_at, alert_channels`
+	status, consecutive_failures, created_at, alert_channels, scope`
+
+// scanFields returns scan destinations in monitorColumns order — every query
+// that selects monitorColumns scans through this so the two can't drift.
+func (m *Monitor) scanFields() []any {
+	return []any{
+		&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
+		&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
+		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels, &m.Scope,
+	}
+}
+
+// accessPredicate is the M6 authorization rule used by every per-monitor
+// query: you can see/manage a monitor if you own it OR it's team-scoped.
+// Team monitors are deliberately editable by the whole team, not just the
+// creator — the team is small and trusted, and orphaned monitors after an
+// owner leaves would be worse.
+const accessPredicate = `(user_id = $2 OR scope = 'team')`
 
 // CreateParams carries validated input — URL format and SSRF validation
 // happen in the HTTP layer before this is called.
@@ -34,6 +51,7 @@ type CreateParams struct {
 	ExpectedStatusMax int
 	FailureThreshold  int
 	AlertChannels     []string // e.g. ["email"], ["push"], ["email","push"]
+	Scope             string   // ScopePersonal (default) or ScopeTeam
 }
 
 func (r *Repository) Create(ctx context.Context, p CreateParams) (Monitor, error) {
@@ -66,21 +84,21 @@ func (r *Repository) Create(ctx context.Context, p CreateParams) (Monitor, error
 	if len(alertChannels) == 0 {
 		alertChannels = []string{"email"}
 	}
+	scope := p.Scope
+	if scope == "" {
+		scope = ScopePersonal
+	}
 
 	var m Monitor
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO monitors (user_id, name, url, method, interval_seconds, timeout_ms,
 		                      expected_status_min, expected_status_max, failure_threshold,
-		                      alert_channels)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		                      alert_channels, scope)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING `+monitorColumns,
 		p.UserID, p.Name, p.URL, p.Method, p.IntervalSeconds, p.TimeoutMS,
-		p.ExpectedStatusMin, p.ExpectedStatusMax, p.FailureThreshold, alertChannels,
-	).Scan(
-		&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
-		&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
-		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels,
-	); err != nil {
+		p.ExpectedStatusMin, p.ExpectedStatusMax, p.FailureThreshold, alertChannels, scope,
+	).Scan(m.scanFields()...); err != nil {
 		return Monitor{}, fmt.Errorf("insert monitor: %w", err)
 	}
 
@@ -90,18 +108,15 @@ func (r *Repository) Create(ctx context.Context, p CreateParams) (Monitor, error
 	return m, nil
 }
 
-// GetForUser fetches a monitor only if it belongs to userID — ownership is
-// enforced at the query level, not by comparing after the fact.
+// GetForUser fetches a monitor the user may access (their own, or any
+// team-scoped one) — authorization is enforced at the query level, not by
+// comparing after the fact.
 func (r *Repository) GetForUser(ctx context.Context, userID, monitorID int64) (Monitor, error) {
 	var m Monitor
 	err := r.pool.QueryRow(ctx,
-		`SELECT `+monitorColumns+` FROM monitors WHERE id = $1 AND user_id = $2`,
+		`SELECT `+monitorColumns+` FROM monitors WHERE id = $1 AND `+accessPredicate,
 		monitorID, userID,
-	).Scan(
-		&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
-		&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
-		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels,
-	)
+	).Scan(m.scanFields()...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Monitor{}, ErrNotFound
 	}
@@ -122,6 +137,7 @@ type UpdateParams struct {
 	ExpectedStatusMax *int
 	FailureThreshold  *int
 	AlertChannels     *[]string // nil = unchanged
+	Scope             *string   // nil = unchanged
 }
 
 func (r *Repository) Update(ctx context.Context, userID, monitorID int64, p UpdateParams) (Monitor, error) {
@@ -136,17 +152,15 @@ func (r *Repository) Update(ctx context.Context, userID, monitorID int64, p Upda
 			expected_status_min = COALESCE($8, expected_status_min),
 			expected_status_max = COALESCE($9, expected_status_max),
 			failure_threshold   = COALESCE($10, failure_threshold),
-			alert_channels      = COALESCE($11, alert_channels)
-		WHERE id = $1 AND user_id = $2
+			alert_channels      = COALESCE($11, alert_channels),
+			scope               = COALESCE($12, scope)
+		WHERE id = $1 AND `+accessPredicate+`
 		RETURNING `+monitorColumns,
 		monitorID, userID,
 		p.Name, p.URL, p.Method, p.IntervalSeconds, p.TimeoutMS,
 		p.ExpectedStatusMin, p.ExpectedStatusMax, p.FailureThreshold, p.AlertChannels,
-	).Scan(
-		&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
-		&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
-		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels,
-	)
+		p.Scope,
+	).Scan(m.scanFields()...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Monitor{}, ErrNotFound
 	}
@@ -158,7 +172,7 @@ func (r *Repository) Update(ctx context.Context, userID, monitorID int64, p Upda
 
 func (r *Repository) Delete(ctx context.Context, userID, monitorID int64) error {
 	tag, err := r.pool.Exec(ctx,
-		`DELETE FROM monitors WHERE id = $1 AND user_id = $2`, monitorID, userID)
+		`DELETE FROM monitors WHERE id = $1 AND `+accessPredicate, monitorID, userID)
 	if err != nil {
 		return fmt.Errorf("delete monitor: %w", err)
 	}
@@ -179,14 +193,10 @@ func (r *Repository) SetPaused(ctx context.Context, userID, monitorID int64, pau
 	var m Monitor
 	err := r.pool.QueryRow(ctx, `
 		UPDATE monitors SET status = $3, consecutive_failures = 0
-		WHERE id = $1 AND user_id = $2
+		WHERE id = $1 AND `+accessPredicate+`
 		RETURNING `+monitorColumns,
 		monitorID, userID, newStatus,
-	).Scan(
-		&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
-		&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
-		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels,
-	)
+	).Scan(m.scanFields()...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Monitor{}, ErrNotFound
 	}

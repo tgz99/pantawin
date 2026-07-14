@@ -36,7 +36,7 @@ func NewEmailChannel(smtpAddr, from string) *EmailChannel {
 func (c *EmailChannel) Name() string { return "email" }
 
 func (c *EmailChannel) Send(ctx context.Context, event IncidentEvent, target ChannelTarget) error {
-	if target.Email == "" {
+	if len(target.Emails) == 0 {
 		return fmt.Errorf("email channel: empty target address")
 	}
 	// Best-effort target IP + geolocation; "" on failure just omits the rows.
@@ -46,7 +46,7 @@ func (c *EmailChannel) Send(ctx context.Context, event IncidentEvent, target Cha
 		return fmt.Errorf("render email: %w", err)
 	}
 
-	msg := buildMIME(c.from, target.Email, content.Subject, content.HTML)
+	msg := buildMIME(c.from, target.Emails, content.Subject, content.HTML)
 
 	// net/smtp has no context support, so bound the dial and the whole
 	// SMTP conversation with explicit deadlines instead of smtp.SendMail.
@@ -70,8 +70,14 @@ func (c *EmailChannel) Send(ctx context.Context, event IncidentEvent, target Cha
 	if err := client.Mail(c.from); err != nil {
 		return fmt.Errorf("smtp mail from: %w", err)
 	}
-	if err := client.Rcpt(target.Email); err != nil {
-		return fmt.Errorf("smtp rcpt to: %w", err)
+	// One message, one RCPT per recipient — Postfix fans the delivery out.
+	// Any rejected recipient fails the send so the retrier re-attempts; the
+	// duplicate to already-accepted recipients is the lesser evil vs. a team
+	// member silently never getting the alert.
+	for _, rcpt := range target.Emails {
+		if err := client.Rcpt(rcpt); err != nil {
+			return fmt.Errorf("smtp rcpt to %s: %w", rcpt, err)
+		}
 	}
 	w, err := client.Data()
 	if err != nil {
@@ -86,10 +92,10 @@ func (c *EmailChannel) Send(ctx context.Context, event IncidentEvent, target Cha
 	return client.Quit()
 }
 
-func buildMIME(from, to, subject, htmlBody string) []byte {
+func buildMIME(from string, to []string, subject, htmlBody string) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "From: Pantawin <%s>\r\n", from)
-	fmt.Fprintf(&b, "To: %s\r\n", to)
+	fmt.Fprintf(&b, "To: %s\r\n", strings.Join(to, ", "))
 	fmt.Fprintf(&b, "Subject: %s\r\n", subject)
 	// Date and Message-ID are required for acceptance at the majors —
 	// Gmail hard-rejects mail without a Message-ID (550 5.7.1).

@@ -45,8 +45,8 @@ android {
         applicationId = "com.pantawin.app"
         minSdk = 30
         targetSdk = 37
-        versionCode = 2
-        versionName = "1.0.0" // M5: analytics v2 + incident history
+        versionCode = 3
+        versionName = "1.1.0" // M6: personal vs team monitoring sections
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

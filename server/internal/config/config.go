@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -44,6 +45,11 @@ type Config struct {
 	// GoogleClientID is the OAuth web client ID used as the required audience
 	// for Google sign-in ID tokens. Empty = Google sign-in dormant.
 	GoogleClientID string
+
+	// SignupAllowlist (M6) restricts new-account creation to a comma-separated
+	// list of emails and/or "@domain.com" entries. Empty = open signup.
+	// Set this once team monitors are in use — every account sees them.
+	SignupAllowlist []string
 }
 
 func Load() (Config, error) {
@@ -66,6 +72,14 @@ func Load() (Config, error) {
 		FCMCredentialsFile: os.Getenv("FCM_CREDENTIALS_FILE"),
 		FCMCredentialsJSON: os.Getenv("FCM_CREDENTIALS_JSON"),
 		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
+	}
+
+	if raw := os.Getenv("SIGNUP_ALLOWLIST"); raw != "" {
+		for _, entry := range strings.Split(raw, ",") {
+			if entry = strings.TrimSpace(entry); entry != "" {
+				cfg.SignupAllowlist = append(cfg.SignupAllowlist, entry)
+			}
+		}
 	}
 
 	if redisDBStr := os.Getenv("REDIS_DB"); redisDBStr != "" {
