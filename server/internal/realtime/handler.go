@@ -11,16 +11,18 @@ import (
 )
 
 // Handler upgrades GET /v1/ws to a WebSocket, then forwards every event
-// published to the authenticated user's Redis channel. Authentication is
-// performed by the caller (the router injects the user id); this handler
-// only needs the id.
+// published to the authenticated user's Redis channel plus every team
+// channel for a team the user belongs to (M6.3 — resolved fresh at connect
+// time via resolveTeams). Authentication is performed by the caller (the
+// router injects the user id); this handler only needs the id.
 type Handler struct {
-	redis  *redis.Client
-	logger *slog.Logger
+	redis        *redis.Client
+	logger       *slog.Logger
+	resolveTeams func(ctx context.Context, userID int64) ([]int64, error)
 }
 
-func NewHandler(redisClient *redis.Client, logger *slog.Logger) *Handler {
-	return &Handler{redis: redisClient, logger: logger}
+func NewHandler(redisClient *redis.Client, logger *slog.Logger, resolveTeams func(ctx context.Context, userID int64) ([]int64, error)) *Handler {
+	return &Handler{redis: redisClient, logger: logger, resolveTeams: resolveTeams}
 }
 
 // Serve runs the WebSocket for one authenticated user until the client
@@ -41,9 +43,19 @@ func (h *Handler) Serve(w http.ResponseWriter, r *http.Request, userID int64) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	// Team-monitor events are broadcast on a shared channel (M6) — every
-	// dashboard sees them alongside its own personal-monitor events.
-	sub := h.redis.Subscribe(ctx, userChannel(userID), teamChannel)
+	// Team-monitor events are broadcast per-team (M6.3) — subscribe to every
+	// team this user belongs to, alongside their own personal channel. A
+	// lookup failure degrades to personal-only rather than failing the
+	// connection outright.
+	channels := []string{userChannel(userID)}
+	if teamIDs, err := h.resolveTeams(ctx, userID); err != nil {
+		h.logger.Error("ws: failed to resolve team memberships", "user_id", userID, "error", err)
+	} else {
+		for _, teamID := range teamIDs {
+			channels = append(channels, teamChannel(teamID))
+		}
+	}
+	sub := h.redis.Subscribe(ctx, channels...)
 	defer sub.Close()
 	ch := sub.Channel()
 

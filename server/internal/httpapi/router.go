@@ -29,10 +29,9 @@ type RouterDeps struct {
 	Redis        *redis.Client
 	Rollup       *analytics.Rollup
 	IncidentRepo *incident.Repository
-	// M6.1 team management. TeamRepo may be nil in tests that don't exercise
-	// it; AdminUserID is the only account allowed to manage the team.
-	TeamRepo    *team.Repository
-	AdminUserID int64
+	// TeamRepo backs both team management (M6.3: any account may create a
+	// team and invite into it) and team-scoped monitor authorization.
+	TeamRepo *team.Repository
 }
 
 func NewRouter(deps RouterDeps) http.Handler {
@@ -48,10 +47,11 @@ func NewRouter(deps RouterDeps) http.Handler {
 	})
 
 	authH := &authHandlers{service: deps.AuthService}
-	monitorH := &monitorHandlers{repo: deps.MonitorRepo, guard: deps.Guard, sched: deps.Scheduler}
+	monitorH := &monitorHandlers{repo: deps.MonitorRepo, guard: deps.Guard, sched: deps.Scheduler, teams: deps.TeamRepo}
 	deviceH := &deviceHandlers{repo: deps.DeviceRepo}
 	statsH := &statsHandlers{repo: deps.MonitorRepo, rollup: deps.Rollup}
 	incidentH := &incidentHandlers{monitors: deps.MonitorRepo, incidents: deps.IncidentRepo}
+	teamH := &teamHandlers{repo: deps.TeamRepo}
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Route("/auth", func(r chi.Router) {
@@ -94,14 +94,15 @@ func NewRouter(deps RouterDeps) http.Handler {
 
 			r.Post("/devices", deviceH.register)
 
-			if deps.TeamRepo != nil {
-				teamH := &teamHandlers{repo: deps.TeamRepo, adminUserID: deps.AdminUserID}
-				r.Route("/team", func(r chi.Router) {
-					r.Get("/", teamH.list)
-					r.Post("/", teamH.add)
-					r.Post("/remove", teamH.remove)
+			r.Route("/teams", func(r chi.Router) {
+				r.Post("/", teamH.create)
+				r.Get("/", teamH.list)
+				r.Route("/{id}/members", func(r chi.Router) {
+					r.Get("/", teamH.listMembers)
+					r.Post("/", teamH.invite)
+					r.Post("/remove", teamH.removeInvite)
 				})
-			}
+			})
 		})
 	})
 

@@ -16,9 +16,11 @@ data class Monitor(
     @SerialName("expected_status_max") val expectedStatusMax: Int,
     @SerialName("failure_threshold") val failureThreshold: Int,
     val status: MonitorState,
-    // "personal" (owner-only) or "team" (shared with every user, M6).
-    // Defaults keep decoding compatible with pre-M6 servers.
+    // "personal" (owner-only) or "team" (shared with one specific team,
+    // M6/M6.3). Default keeps decoding compatible with pre-M6 servers.
     val scope: String = "personal",
+    // Set iff scope == "team" — which team (an account can belong to several).
+    @SerialName("team_id") val teamId: Long? = null,
     @SerialName("created_at") val createdAt: String,
 )
 
@@ -36,4 +38,6 @@ data class MonitorInput(
     @SerialName("alert_channels") val alertChannels: List<String>? = null,
     // "personal" or "team" (M6); null = server default (personal).
     val scope: String? = null,
+    // Required together with scope="team" — which team to share it with.
+    @SerialName("team_id") val teamId: Long? = null,
 )

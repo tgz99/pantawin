@@ -5,8 +5,11 @@ import com.pantawin.shared.model.Monitor
 import com.pantawin.shared.model.MonitorInput
 import com.pantawin.shared.model.MonitorStats
 import com.pantawin.shared.model.MonitorStatus
-import com.pantawin.shared.model.TeamList
+import com.pantawin.shared.model.CreateTeamRequest
+import com.pantawin.shared.model.Team
 import com.pantawin.shared.model.TeamMemberInput
+import com.pantawin.shared.model.TeamMembersResponse
+import com.pantawin.shared.model.TeamsResponse
 import com.pantawin.shared.model.Tokens
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -162,22 +165,34 @@ class PantawinApiClient(
         client.post("$baseUrl/v1/monitors/$id/resume") { bearer(accessToken) }
             .requireSuccess().body()
 
-    // --- Team management (M6.1, admin-only server-side) ---
+    // --- Team management (M6.3: any account creates/joins teams) ---
 
-    suspend fun getTeam(accessToken: String): TeamList =
-        client.get("$baseUrl/v1/team") { bearer(accessToken) }
+    suspend fun createTeam(accessToken: String, name: String): Team =
+        client.post("$baseUrl/v1/teams") {
+            bearer(accessToken)
+            contentType(ContentType.Application.Json)
+            setBody(CreateTeamRequest(name))
+        }.requireSuccess().body()
+
+    /** Every team the caller belongs to. */
+    suspend fun getTeams(accessToken: String): TeamsResponse =
+        client.get("$baseUrl/v1/teams") { bearer(accessToken) }
             .requireSuccess().body()
 
-    suspend fun addTeamMember(accessToken: String, email: String) {
-        client.post("$baseUrl/v1/team") {
+    suspend fun getTeamMembers(accessToken: String, teamId: Long): TeamMembersResponse =
+        client.get("$baseUrl/v1/teams/$teamId/members") { bearer(accessToken) }
+            .requireSuccess().body()
+
+    suspend fun inviteTeamMember(accessToken: String, teamId: Long, email: String) {
+        client.post("$baseUrl/v1/teams/$teamId/members") {
             bearer(accessToken)
             contentType(ContentType.Application.Json)
             setBody(TeamMemberInput(email))
         }.requireSuccess()
     }
 
-    suspend fun removeTeamMember(accessToken: String, email: String) {
-        client.post("$baseUrl/v1/team/remove") {
+    suspend fun removeTeamInvite(accessToken: String, teamId: Long, email: String) {
+        client.post("$baseUrl/v1/teams/$teamId/members/remove") {
             bearer(accessToken)
             contentType(ContentType.Application.Json)
             setBody(TeamMemberInput(email))

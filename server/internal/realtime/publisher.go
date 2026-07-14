@@ -29,9 +29,13 @@ func userChannel(userID int64) string {
 	return fmt.Sprintf("pantawin:ws:user:%d", userID)
 }
 
-// teamChannel carries events for team-scoped monitors (M6); every connected
-// dashboard subscribes to it in addition to its own user channel.
-const teamChannel = "pantawin:ws:team"
+// teamChannel is the Redis pub/sub channel for one team's events (M6.3 —
+// teams are now plural, so this is per-team, not a single global channel).
+// Every connected dashboard subscribes to its own user channel plus one of
+// these per team it belongs to.
+func teamChannel(teamID int64) string {
+	return fmt.Sprintf("pantawin:ws:team:%d", teamID)
+}
 
 type Publisher struct {
 	redis *redis.Client
@@ -50,11 +54,11 @@ func (p *Publisher) Publish(ctx context.Context, userID int64, event Event) erro
 }
 
 // PublishTeam broadcasts an event for a team-scoped monitor to every
-// connected dashboard.
-func (p *Publisher) PublishTeam(ctx context.Context, event Event) error {
+// connected dashboard whose owner belongs to teamID.
+func (p *Publisher) PublishTeam(ctx context.Context, teamID int64, event Event) error {
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}
-	return p.redis.Publish(ctx, teamChannel, payload).Err()
+	return p.redis.Publish(ctx, teamChannel(teamID), payload).Err()
 }

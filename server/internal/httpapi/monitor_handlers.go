@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/tgz99/pantawin/server/internal/monitor"
 	"github.com/tgz99/pantawin/server/internal/ssrf"
+	"github.com/tgz99/pantawin/server/internal/team"
 )
 
 // SchedulerControl is what the HTTP layer needs from the scheduler —
@@ -24,6 +25,7 @@ type monitorHandlers struct {
 	repo  *monitor.Repository
 	guard *ssrf.Guard
 	sched SchedulerControl
+	teams *team.Repository
 }
 
 type monitorRequest struct {
@@ -36,7 +38,8 @@ type monitorRequest struct {
 	ExpectedStatusMax *int      `json:"expected_status_max"`
 	FailureThreshold  *int      `json:"failure_threshold"`
 	AlertChannels     *[]string `json:"alert_channels"`
-	Scope             *string   `json:"scope"` // "personal" (default) | "team"
+	Scope             *string   `json:"scope"`   // "personal" (default) | "team"
+	TeamID            *int64    `json:"team_id"` // required together with scope=team
 }
 
 type monitorResponse struct {
@@ -51,6 +54,7 @@ type monitorResponse struct {
 	FailureThreshold  int            `json:"failure_threshold"`
 	AlertChannels     []string       `json:"alert_channels"`
 	Scope             string         `json:"scope"`
+	TeamID            *int64         `json:"team_id"`
 	Status            monitor.Status `json:"status"`
 	CreatedAt         time.Time      `json:"created_at"`
 }
@@ -61,7 +65,7 @@ func toMonitorResponse(m monitor.Monitor) monitorResponse {
 		IntervalSeconds: m.IntervalSeconds, TimeoutMS: m.TimeoutMS,
 		ExpectedStatusMin: m.ExpectedStatusMin, ExpectedStatusMax: m.ExpectedStatusMax,
 		FailureThreshold: m.FailureThreshold, AlertChannels: m.AlertChannels,
-		Scope: m.Scope, Status: m.Status, CreatedAt: m.CreatedAt,
+		Scope: m.Scope, TeamID: m.TeamID, Status: m.Status, CreatedAt: m.CreatedAt,
 	}
 }
 
@@ -84,10 +88,10 @@ func validAlertChannels(channels []string) bool {
 // Spec section 3.2: min interval 30s, default 60s; timeout default 10s;
 // expected status default 200-399; failure threshold default 2.
 const (
-	minIntervalSeconds = 30
-	maxIntervalSeconds = 24 * 60 * 60
-	minTimeoutMS       = 1000
-	maxTimeoutMS       = 60000
+	minIntervalSeconds  = 30
+	maxIntervalSeconds  = 24 * 60 * 60
+	minTimeoutMS        = 1000
+	maxTimeoutMS        = 60000
 	maxFailureThreshold = 10
 )
 
@@ -165,6 +169,14 @@ func (h *monitorHandlers) validateAndApplyDefaults(ctx context.Context, req moni
 		}
 		p.Scope = *req.Scope
 	}
+	if p.Scope == monitor.ScopeTeam {
+		if req.TeamID == nil {
+			return p, "team_id is required when scope is team"
+		}
+		p.TeamID = req.TeamID
+	} else if req.TeamID != nil {
+		return p, "team_id can only be set when scope is team"
+	}
 	return p, ""
 }
 
@@ -187,6 +199,18 @@ func (h *monitorHandlers) createMonitor(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	params.UserID = userID
+
+	if params.Scope == monitor.ScopeTeam {
+		member, err := h.teams.IsMember(r.Context(), *params.TeamID, userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to verify team membership")
+			return
+		}
+		if !member {
+			writeError(w, http.StatusForbidden, "you are not a member of that team")
+			return
+		}
+	}
 
 	m, err := h.repo.Create(r.Context(), params)
 	if err != nil {
@@ -286,12 +310,44 @@ func (h *monitorHandlers) updateMonitor(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// team_id only ever moves in lockstep with scope: flipping to personal
+	// clears it, flipping to (or staying) team requires it and a fresh
+	// membership check, and it's rejected outright without a scope change.
+	var teamID *int64
+	if req.Scope != nil {
+		switch *req.Scope {
+		case monitor.ScopeTeam:
+			if req.TeamID == nil {
+				writeError(w, http.StatusBadRequest, "team_id is required when scope is team")
+				return
+			}
+			member, err := h.teams.IsMember(r.Context(), *req.TeamID, userID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to verify team membership")
+				return
+			}
+			if !member {
+				writeError(w, http.StatusForbidden, "you are not a member of that team")
+				return
+			}
+			teamID = req.TeamID
+		case monitor.ScopePersonal:
+			if req.TeamID != nil {
+				writeError(w, http.StatusBadRequest, "team_id must not be set when scope is personal")
+				return
+			}
+		}
+	} else if req.TeamID != nil {
+		writeError(w, http.StatusBadRequest, "team_id can only be set together with scope=team")
+		return
+	}
+
 	m, err := h.repo.Update(r.Context(), userID, id, monitor.UpdateParams{
 		Name: req.Name, URL: req.URL, Method: req.Method,
 		IntervalSeconds: req.IntervalSeconds, TimeoutMS: req.TimeoutMS,
 		ExpectedStatusMin: req.ExpectedStatusMin, ExpectedStatusMax: req.ExpectedStatusMax,
 		FailureThreshold: req.FailureThreshold, AlertChannels: req.AlertChannels,
-		Scope: req.Scope,
+		Scope: req.Scope, TeamID: teamID, ScopeSet: req.Scope != nil,
 	})
 	if err != nil {
 		if errors.Is(err, monitor.ErrNotFound) {

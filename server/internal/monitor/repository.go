@@ -52,11 +52,14 @@ func (r *Repository) findByURL(ctx context.Context, userID int64, url string) (M
 }
 
 // ListForUser returns every monitor the user can access: their personal
-// monitors plus all team-scoped ones (M6).
+// monitors plus every team-scoped monitor belonging to a team they're a
+// member of (M6.3).
 func (r *Repository) ListForUser(ctx context.Context, userID int64) ([]Monitor, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT `+monitorColumns+`
-		FROM monitors WHERE user_id = $1 OR scope = 'team'
+		FROM monitors
+		WHERE user_id = $1
+		   OR (scope = 'team' AND team_id IN (SELECT team_id FROM team_members WHERE user_id = $1))
 		ORDER BY id
 	`, userID)
 	if err != nil {
@@ -76,28 +79,32 @@ func (r *Repository) ListForUser(ctx context.Context, userID int64) ([]Monitor, 
 }
 
 // AlertConfig resolves how a monitor should be alerted: its enabled channels
-// and the destination emails. A per-monitor override wins outright; otherwise
-// personal monitors alert the owner and team monitors alert every registered
-// user (M6). Used by the notification dispatcher.
+// and the destination emails. A per-monitor override wins outright;
+// otherwise personal monitors alert the owner and team monitors alert every
+// member of that specific team (M6.3). Used by the notification dispatcher.
 func (r *Repository) AlertConfig(ctx context.Context, monitorID int64) (channels []string, emails []string, err error) {
 	var override *string
 	var ownerEmail, scope string
+	var teamID *int64
 	err = r.pool.QueryRow(ctx, `
-		SELECT m.alert_channels, m.alert_email, m.scope, u.email
+		SELECT m.alert_channels, m.alert_email, m.scope, m.team_id, u.email
 		FROM monitors m JOIN users u ON u.id = m.user_id
 		WHERE m.id = $1
-	`, monitorID).Scan(&channels, &override, &scope, &ownerEmail)
+	`, monitorID).Scan(&channels, &override, &scope, &teamID, &ownerEmail)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load alert config: %w", err)
 	}
 	if override != nil && *override != "" {
 		return channels, []string{*override}, nil
 	}
-	if scope != ScopeTeam {
+	if scope != ScopeTeam || teamID == nil {
 		return channels, []string{ownerEmail}, nil
 	}
 
-	rows, err := r.pool.Query(ctx, `SELECT email FROM users ORDER BY id`)
+	rows, err := r.pool.Query(ctx, `
+		SELECT u.email FROM team_members tm JOIN users u ON u.id = tm.user_id
+		WHERE tm.team_id = $1 ORDER BY u.id
+	`, *teamID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load team emails: %w", err)
 	}
@@ -210,12 +217,15 @@ func (r *Repository) RecordCheck(ctx context.Context, monitorID int64, result ch
 }
 
 // StatusViews returns the API-facing view for each monitor the user can
-// access (personal + team, M6), including the most recent check result if
-// one exists.
+// access (personal, plus team-scoped monitors of teams they belong to,
+// M6.3), including the most recent check result and — for team monitors —
+// the team's name, so a member of several teams can tell them apart.
 func (r *Repository) StatusViews(ctx context.Context, userID int64) ([]StatusView, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT m.id, m.name, m.url, m.status, m.scope, lc.checked_at, lc.response_time_ms
+		SELECT m.id, m.name, m.url, m.status, m.scope, m.team_id, t.name,
+		       lc.checked_at, lc.response_time_ms
 		FROM monitors m
+		LEFT JOIN teams t ON t.id = m.team_id
 		LEFT JOIN LATERAL (
 			SELECT checked_at, response_time_ms
 			FROM check_results cr
@@ -223,7 +233,8 @@ func (r *Repository) StatusViews(ctx context.Context, userID int64) ([]StatusVie
 			ORDER BY cr.checked_at DESC
 			LIMIT 1
 		) lc ON true
-		WHERE m.user_id = $1 OR m.scope = 'team'
+		WHERE m.user_id = $1
+		   OR (m.scope = 'team' AND m.team_id IN (SELECT team_id FROM team_members WHERE user_id = $1))
 		ORDER BY m.id
 	`, userID)
 	if err != nil {
@@ -234,7 +245,10 @@ func (r *Repository) StatusViews(ctx context.Context, userID int64) ([]StatusVie
 	var views []StatusView
 	for rows.Next() {
 		var v StatusView
-		if err := rows.Scan(&v.ID, &v.Name, &v.URL, &v.Status, &v.Scope, &v.LastCheckedAt, &v.ResponseTimeMS); err != nil {
+		if err := rows.Scan(
+			&v.ID, &v.Name, &v.URL, &v.Status, &v.Scope, &v.TeamID, &v.TeamName,
+			&v.LastCheckedAt, &v.ResponseTimeMS,
+		); err != nil {
 			return nil, fmt.Errorf("scan status view: %w", err)
 		}
 		views = append(views, v)

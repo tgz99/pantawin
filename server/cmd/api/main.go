@@ -93,7 +93,10 @@ func run(logger *slog.Logger) error {
 		WithGoogleVerifier(auth.NewGoogleVerifier(cfg.GoogleClientID)).
 		WithSignupAllowlist(cfg.SignupAllowlist).
 		WithSignupAllowlistStore(teamRepo.Allowed).
-		WithOTPMailer(otpMailer)
+		WithOTPMailer(otpMailer).
+		// M6.3: pending team invites for an email attach the moment that
+		// email's account first exists.
+		WithOnUserCreated(teamRepo.ConsumeInvitesOnAccountCreated)
 	logger.Info("signup gated by team invites", "env_entries", len(cfg.SignupAllowlist))
 	if cfg.GoogleClientID != "" {
 		logger.Info("google sign-in enabled")
@@ -129,9 +132,9 @@ func run(logger *slog.Logger) error {
 			if err != nil {
 				return 0, nil, err
 			}
-			// Team monitors (M6) push to every registered device.
-			if m.Scope == monitor.ScopeTeam {
-				tokens, err := deviceRepo.AllTokens(ctx)
+			// Team monitors push to every member of that specific team (M6.3).
+			if m.Scope == monitor.ScopeTeam && m.TeamID != nil {
+				tokens, err := deviceRepo.TokensForTeam(ctx, *m.TeamID)
 				return m.UserID, tokens, err
 			}
 			tokens, err := deviceRepo.TokensForUser(ctx, m.UserID)
@@ -162,9 +165,10 @@ func run(logger *slog.Logger) error {
 	// notification_log, so retries survive restarts).
 	go dispatcher.RunRetrier(ctx)
 
-	// M3: realtime WebSocket feed.
+	// M3: realtime WebSocket feed. Team channels are resolved per-connection
+	// (M6.3 — a user may belong to several teams).
 	publisher := realtime.NewPublisher(redisClient)
-	wsHandler := realtime.NewHandler(redisClient, logger)
+	wsHandler := realtime.NewHandler(redisClient, logger, teamRepo.TeamIDsForUser)
 
 	// M4: analytics rollups (idempotent upserts over a trailing window).
 	rollup := analytics.NewRollup(pool, logger)
@@ -196,7 +200,6 @@ func run(logger *slog.Logger) error {
 		Rollup:       rollup,
 		IncidentRepo: incidentRepo,
 		TeamRepo:     teamRepo,
-		AdminUserID:  adminUser.ID,
 	})
 
 	server := &http.Server{
@@ -304,10 +307,10 @@ func publishStatus(ctx context.Context, publisher *realtime.Publisher, m monitor
 }
 
 // publishForScope routes an event to the owner's feed for personal monitors
-// or the shared team feed for team monitors (M6).
+// or that specific team's feed for team monitors (M6.3).
 func publishForScope(ctx context.Context, publisher *realtime.Publisher, m monitor.Monitor, evt realtime.Event) error {
-	if m.Scope == monitor.ScopeTeam {
-		return publisher.PublishTeam(ctx, evt)
+	if m.Scope == monitor.ScopeTeam && m.TeamID != nil {
+		return publisher.PublishTeam(ctx, *m.TeamID, evt)
 	}
 	return publisher.Publish(ctx, m.UserID, evt)
 }

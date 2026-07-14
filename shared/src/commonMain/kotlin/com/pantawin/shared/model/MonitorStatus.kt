@@ -19,6 +19,10 @@ data class MonitorStatus(
     // "personal" or "team" (M6) — drives the dashboard's two sections.
     // Default keeps decoding compatible with pre-M6 servers.
     val scope: String = "personal",
+    // Which team (M6.3: an account can belong to several), and its name for
+    // display — both set iff scope == "team".
+    @SerialName("team_id") val teamId: Long? = null,
+    @SerialName("team_name") val teamName: String? = null,
     @SerialName("last_checked_at") val lastCheckedAt: String? = null,
     @SerialName("response_time_ms") val responseTimeMs: Int? = null,
 )

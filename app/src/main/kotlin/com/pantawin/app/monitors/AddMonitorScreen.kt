@@ -20,8 +20,12 @@ import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -44,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.pantawin.shared.model.Team
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -59,7 +64,15 @@ fun AddMonitorScreen(
     var emailAlerts by remember { mutableStateOf(true) }
     var pushAlerts by remember { mutableStateOf(true) }
     var teamScope by remember { mutableStateOf(false) }
+    var selectedTeam by remember { mutableStateOf<Team?>(null) }
 
+    // Default to the caller's only team once teams load, so single-team
+    // accounts don't have to open the picker at all.
+    LaunchedEffect(state.teams) {
+        if (selectedTeam == null && state.teams.size == 1) {
+            selectedTeam = state.teams.first()
+        }
+    }
     LaunchedEffect(state.done) {
         if (state.done) onDone()
     }
@@ -130,16 +143,42 @@ fun AddMonitorScreen(
                     label = { Text("Team") },
                 )
             }
-            Text(
-                if (teamScope) {
-                    "Shared: every team member sees this monitor and gets its alerts."
-                } else {
-                    "Private: only you see this monitor and get its alerts."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 6.dp),
-            )
+
+            if (teamScope) {
+                when {
+                    state.teamsLoading -> Text(
+                        "Loading your teams…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    state.teams.isEmpty() -> Text(
+                        "You don't belong to any team yet — create one from the Teams screen first.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    else -> TeamPicker(
+                        teams = state.teams,
+                        selected = selectedTeam,
+                        onSelect = { selectedTeam = it },
+                        modifier = Modifier.padding(top = 10.dp),
+                    )
+                }
+                Text(
+                    "Shared: every member of that team sees this monitor and gets its alerts.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            } else {
+                Text(
+                    "Private: only you see this monitor and get its alerts.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
 
             Text(
                 "Alert me via",
@@ -177,9 +216,10 @@ fun AddMonitorScreen(
                             if (pushAlerts) add("push")
                         },
                         scope = if (teamScope) "team" else "personal",
+                        teamId = if (teamScope) selectedTeam?.id else null,
                     )
                 },
-                enabled = !state.submitting,
+                enabled = !state.submitting && (!teamScope || selectedTeam != null),
                 shape = MaterialTheme.shapes.medium,
                 modifier = Modifier.fillMaxWidth().padding(top = 24.dp).height(52.dp),
             ) {
@@ -188,6 +228,40 @@ fun AddMonitorScreen(
                 } else {
                     Text("Start monitoring", style = MaterialTheme.typography.titleMedium)
                 }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TeamPicker(
+    teams: List<Team>,
+    selected: Team?,
+    onSelect: (Team) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }, modifier = modifier) {
+        OutlinedTextField(
+            value = selected?.name ?: "Choose a team",
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Team") },
+            leadingIcon = { Icon(Icons.Outlined.Groups, contentDescription = null) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryEditable, true),
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            teams.forEach { team ->
+                DropdownMenuItem(
+                    text = { Text(team.name) },
+                    onClick = {
+                        onSelect(team)
+                        expanded = false
+                    },
+                )
             }
         }
     }

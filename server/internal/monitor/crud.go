@@ -19,7 +19,7 @@ const MaxMonitorsPerUser = 50
 
 const monitorColumns = `id, user_id, name, url, method, interval_seconds, timeout_ms,
 	expected_status_min, expected_status_max, failure_threshold,
-	status, consecutive_failures, created_at, alert_channels, scope`
+	status, consecutive_failures, created_at, alert_channels, scope, team_id`
 
 // scanFields returns scan destinations in monitorColumns order — every query
 // that selects monitorColumns scans through this so the two can't drift.
@@ -27,16 +27,19 @@ func (m *Monitor) scanFields() []any {
 	return []any{
 		&m.ID, &m.UserID, &m.Name, &m.URL, &m.Method, &m.IntervalSeconds, &m.TimeoutMS,
 		&m.ExpectedStatusMin, &m.ExpectedStatusMax, &m.FailureThreshold,
-		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels, &m.Scope,
+		&m.Status, &m.ConsecutiveFailures, &m.CreatedAt, &m.AlertChannels, &m.Scope, &m.TeamID,
 	}
 }
 
-// accessPredicate is the M6 authorization rule used by every per-monitor
-// query: you can see/manage a monitor if you own it OR it's team-scoped.
-// Team monitors are deliberately editable by the whole team, not just the
-// creator — the team is small and trusted, and orphaned monitors after an
-// owner leaves would be worse.
-const accessPredicate = `(user_id = $2 OR scope = 'team')`
+// accessPredicate is the authorization rule used by every per-monitor query:
+// you can see/manage a monitor if you own it, or it belongs to a team you're
+// a member of (M6.3 — team membership is now per-team, not implicit for all
+// registered accounts). Team monitors are deliberately editable by any
+// member, not just the creator — teams are small and trusted, and orphaned
+// monitors after an owner leaves would be worse.
+const accessPredicate = `(user_id = $2 OR (scope = 'team' AND team_id IN (
+	SELECT team_id FROM team_members WHERE user_id = $2
+)))`
 
 // CreateParams carries validated input — URL format and SSRF validation
 // happen in the HTTP layer before this is called.
@@ -52,6 +55,7 @@ type CreateParams struct {
 	FailureThreshold  int
 	AlertChannels     []string // e.g. ["email"], ["push"], ["email","push"]
 	Scope             string   // ScopePersonal (default) or ScopeTeam
+	TeamID            *int64   // required iff Scope == ScopeTeam; caller validates membership
 }
 
 func (r *Repository) Create(ctx context.Context, p CreateParams) (Monitor, error) {
@@ -93,11 +97,11 @@ func (r *Repository) Create(ctx context.Context, p CreateParams) (Monitor, error
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO monitors (user_id, name, url, method, interval_seconds, timeout_ms,
 		                      expected_status_min, expected_status_max, failure_threshold,
-		                      alert_channels, scope)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		                      alert_channels, scope, team_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING `+monitorColumns,
 		p.UserID, p.Name, p.URL, p.Method, p.IntervalSeconds, p.TimeoutMS,
-		p.ExpectedStatusMin, p.ExpectedStatusMax, p.FailureThreshold, alertChannels, scope,
+		p.ExpectedStatusMin, p.ExpectedStatusMax, p.FailureThreshold, alertChannels, scope, p.TeamID,
 	).Scan(m.scanFields()...); err != nil {
 		return Monitor{}, fmt.Errorf("insert monitor: %w", err)
 	}
@@ -138,6 +142,13 @@ type UpdateParams struct {
 	FailureThreshold  *int
 	AlertChannels     *[]string // nil = unchanged
 	Scope             *string   // nil = unchanged
+	// TeamID/ScopeSet apply together: ScopeSet distinguishes "Scope wasn't
+	// touched" from "team_id should be written as-is (including to NULL)".
+	// The httpapi layer only ever sets ScopeSet when Scope is also being
+	// changed, so team_id and scope can't drift out of sync with the
+	// monitors_team_scope_check constraint.
+	TeamID   *int64
+	ScopeSet bool
 }
 
 func (r *Repository) Update(ctx context.Context, userID, monitorID int64, p UpdateParams) (Monitor, error) {
@@ -153,13 +164,14 @@ func (r *Repository) Update(ctx context.Context, userID, monitorID int64, p Upda
 			expected_status_max = COALESCE($9, expected_status_max),
 			failure_threshold   = COALESCE($10, failure_threshold),
 			alert_channels      = COALESCE($11, alert_channels),
-			scope               = COALESCE($12, scope)
+			scope               = COALESCE($12, scope),
+			team_id             = CASE WHEN $13 THEN $14 ELSE team_id END
 		WHERE id = $1 AND `+accessPredicate+`
 		RETURNING `+monitorColumns,
 		monitorID, userID,
 		p.Name, p.URL, p.Method, p.IntervalSeconds, p.TimeoutMS,
 		p.ExpectedStatusMin, p.ExpectedStatusMax, p.FailureThreshold, p.AlertChannels,
-		p.Scope,
+		p.Scope, p.ScopeSet, p.TeamID,
 	).Scan(m.scanFields()...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Monitor{}, ErrNotFound

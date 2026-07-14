@@ -41,11 +41,22 @@ type Service struct {
 	// normal dormant-feature state, since email/password signup has no
 	// fallback path.
 	otpMailer func(ctx context.Context, to, code string) error
+	// onUserCreated fires exactly once, right when a users row for an email
+	// first comes into existence (M6.3: lets pending team invites for that
+	// email attach to the new account). nil = no-op.
+	onUserCreated func(ctx context.Context, userID int64, email string) error
 }
 
 // WithOTPMailer wires verification-code delivery for email/password signup.
 func (s *Service) WithOTPMailer(mailer func(ctx context.Context, to, code string) error) *Service {
 	s.otpMailer = mailer
+	return s
+}
+
+// WithOnUserCreated wires a hook invoked once when a brand-new account is
+// created (Register or Google's find-or-create).
+func (s *Service) WithOnUserCreated(fn func(ctx context.Context, userID int64, email string) error) *Service {
+	s.onUserCreated = fn
 	return s
 }
 
@@ -115,6 +126,11 @@ func (s *Service) Register(ctx context.Context, email, password string) error {
 	user, err := s.repo.CreateOrReplaceUnverifiedUser(ctx, email, hash)
 	if err != nil {
 		return err // may be ErrEmailAlreadyRegistered — caller maps to HTTP status
+	}
+	if s.onUserCreated != nil {
+		if err := s.onUserCreated(ctx, user.ID, user.Email); err != nil {
+			return fmt.Errorf("attach pending team invites: %w", err)
+		}
 	}
 	return s.sendOTP(ctx, user.Email, true) // bypass cooldown: see IssueOTPBypassingCooldown
 }

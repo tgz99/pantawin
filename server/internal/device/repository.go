@@ -56,13 +56,18 @@ func (r *Repository) TokensForUser(ctx context.Context, userID int64) ([]string,
 	return tokens, rows.Err()
 }
 
-// AllTokens returns every registered FCM token across all users — team
-// monitors (M6) push to the whole team. DISTINCT because the same physical
-// device re-registered under another account must not be notified twice.
-func (r *Repository) AllTokens(ctx context.Context) ([]string, error) {
-	rows, err := r.pool.Query(ctx, `SELECT DISTINCT fcm_token FROM devices`)
+// TokensForTeam returns every FCM token registered to a member of teamID —
+// team monitors (M6.3) push to every member of their specific team, not
+// every registered account. DISTINCT because the same physical device
+// re-registered under another account must not be notified twice.
+func (r *Repository) TokensForTeam(ctx context.Context, teamID int64) ([]string, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT DISTINCT d.fcm_token
+		FROM devices d JOIN team_members tm ON tm.user_id = d.user_id
+		WHERE tm.team_id = $1
+	`, teamID)
 	if err != nil {
-		return nil, fmt.Errorf("query all device tokens: %w", err)
+		return nil, fmt.Errorf("query team device tokens: %w", err)
 	}
 	defer rows.Close()
 

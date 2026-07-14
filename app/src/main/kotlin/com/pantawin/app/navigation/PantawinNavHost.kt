@@ -20,8 +20,10 @@ import com.pantawin.app.PantawinApp
 import com.pantawin.app.about.AboutScreen
 import com.pantawin.app.data.SessionTeamGateway
 import com.pantawin.app.data.TeamGateway
-import com.pantawin.app.team.TeamScreen
-import com.pantawin.app.team.TeamViewModel
+import com.pantawin.app.team.TeamMembersScreen
+import com.pantawin.app.team.TeamMembersViewModel
+import com.pantawin.app.team.TeamsListScreen
+import com.pantawin.app.team.TeamsListViewModel
 import com.pantawin.app.auth.AuthFlow
 import com.pantawin.app.auth.AuthViewModel
 import com.pantawin.app.auth.ChangePasswordScreen
@@ -48,12 +50,15 @@ private object Routes {
     const val Add = "add"
     const val ChangePassword = "change-password"
     const val About = "about"
-    const val Team = "team"
+    const val Teams = "teams"
+    const val TeamMembers = "teams/{id}/members/{name}"
     const val Detail = "monitor/{id}"
     const val Incidents = "monitor/{id}/incidents"
 
     fun detail(id: Long) = "monitor/$id"
     fun incidents(id: Long) = "monitor/$id/incidents"
+    fun teamMembers(id: Long, name: String) =
+        "teams/$id/members/${java.net.URLEncoder.encode(name, "UTF-8")}"
 }
 
 // savedStateHandle key: Add screen -> Monitors screen "a monitor was created".
@@ -123,7 +128,7 @@ fun PantawinNavHost(session: SessionManager) {
                 onOpen = { id -> navController.navigate(Routes.detail(id)) },
                 onChangePassword = { navController.navigate(Routes.ChangePassword) },
                 onAbout = { navController.navigate(Routes.About) },
-                onTeam = { navController.navigate(Routes.Team) },
+                onTeam = { navController.navigate(Routes.Teams) },
                 onLogout = { vm.viewModelScope.launch { session.logout() } },
                 showPushDegradedBanner = pushDegraded,
             )
@@ -156,9 +161,26 @@ fun PantawinNavHost(session: SessionManager) {
         composable(Routes.About) {
             AboutScreen(onBack = { navController.popBackStack() })
         }
-        composable(Routes.Team) {
-            val vm: TeamViewModel = viewModel(factory = factory { TeamViewModel(teamGateway) })
-            TeamScreen(viewModel = vm, onBack = { navController.popBackStack() })
+        composable(Routes.Teams) {
+            val vm: TeamsListViewModel = viewModel(factory = factory { TeamsListViewModel(teamGateway) })
+            TeamsListScreen(
+                viewModel = vm,
+                onBack = { navController.popBackStack() },
+                onOpenTeam = { team -> navController.navigate(Routes.teamMembers(team.id, team.name)) },
+            )
+        }
+        composable(
+            route = Routes.TeamMembers,
+            arguments = listOf(
+                navArgument("id") { type = NavType.LongType },
+                navArgument("name") { type = NavType.StringType },
+            ),
+        ) { entry ->
+            val id = entry.arguments?.getLong("id") ?: return@composable
+            val encodedName = entry.arguments?.getString("name").orEmpty()
+            val name = java.net.URLDecoder.decode(encodedName, "UTF-8")
+            val vm: TeamMembersViewModel = viewModel(factory = factory { TeamMembersViewModel(teamGateway, id) })
+            TeamMembersScreen(viewModel = vm, teamName = name, onBack = { navController.popBackStack() })
         }
         composable(Routes.ChangePassword) {
             val vm: ChangePasswordViewModel = viewModel(factory = factory { ChangePasswordViewModel(session) })
@@ -169,7 +191,7 @@ fun PantawinNavHost(session: SessionManager) {
             )
         }
         composable(Routes.Add) {
-            val vm: AddMonitorViewModel = viewModel(factory = factory { AddMonitorViewModel(gateway) })
+            val vm: AddMonitorViewModel = viewModel(factory = factory { AddMonitorViewModel(gateway, teamGateway) })
             AddMonitorScreen(
                 viewModel = vm,
                 onDone = {

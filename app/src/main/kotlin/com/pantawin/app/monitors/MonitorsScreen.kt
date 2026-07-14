@@ -112,7 +112,7 @@ fun MonitorsScreen(
                             },
                         )
                         DropdownMenuItem(
-                            text = { Text("Team members") },
+                            text = { Text("Teams") },
                             leadingIcon = { Icon(Icons.Outlined.Groups, contentDescription = null) },
                             onClick = {
                                 menuOpen = false
@@ -194,7 +194,7 @@ fun MonitorsScreen(
                             }
                             if (team.isEmpty()) {
                                 item(key = "empty-team") {
-                                    SectionHint("No team monitors yet — everyone sees these and gets their alerts.")
+                                    SectionHint("No team monitors yet — monitors shared to a team are visible to every member and alert them all.")
                                 }
                             }
                             items(team, key = { it.id }) { m ->
@@ -345,6 +345,18 @@ private fun MonitorCard(
                             modifier = Modifier.padding(start = 10.dp),
                         )
                     }
+                }
+                // M6.3: an account can belong to several teams, so a team
+                // monitor's card names which one it's shared with.
+                monitor.teamName?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
                 }
             }
             if (monitor.status == MonitorState.PAUSED) {

@@ -86,8 +86,15 @@ func (s *Service) GoogleLogin(ctx context.Context, rawIDToken string) (Tokens, e
 		}
 		// Google verified this email itself — no OTP step needed (M6.2).
 		user, err = s.repo.CreateUser(ctx, identity.Email, hash, true)
-	}
-	if err != nil {
+		if err != nil {
+			return Tokens{}, err
+		}
+		if s.onUserCreated != nil {
+			if hookErr := s.onUserCreated(ctx, user.ID, user.Email); hookErr != nil {
+				return Tokens{}, fmt.Errorf("attach pending team invites: %w", hookErr)
+			}
+		}
+	} else if err != nil {
 		return Tokens{}, err
 	}
 	if !user.EmailVerified {

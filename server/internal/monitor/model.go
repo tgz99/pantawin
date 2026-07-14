@@ -18,10 +18,9 @@ const (
 	StatusPending Status = "PENDING"
 )
 
-// Scope (M6): personal monitors belong to their owner; team monitors are
-// visible to every user and alert the whole team. There is one implicit
-// team — all registered users — so gate registration (SIGNUP_ALLOWLIST)
-// when team monitors are in use.
+// Scope: personal monitors belong to their owner; team monitors (M6, teams
+// made plural and self-service in M6.3) belong to one specific team and are
+// visible to / alert every member of that team.
 const (
 	ScopePersonal = "personal"
 	ScopeTeam     = "team"
@@ -30,21 +29,22 @@ const (
 func ValidScope(s string) bool { return s == ScopePersonal || s == ScopeTeam }
 
 type Monitor struct {
-	ID                 int64
-	UserID             int64
-	Name               string
-	URL                string
-	Method             string
-	IntervalSeconds    int
-	TimeoutMS          int
-	ExpectedStatusMin  int
-	ExpectedStatusMax  int
-	FailureThreshold   int
-	Status             Status
+	ID                  int64
+	UserID              int64
+	Name                string
+	URL                 string
+	Method              string
+	IntervalSeconds     int
+	TimeoutMS           int
+	ExpectedStatusMin   int
+	ExpectedStatusMax   int
+	FailureThreshold    int
+	Status              Status
 	ConsecutiveFailures int
-	AlertChannels      []string
-	Scope              string
-	CreatedAt          time.Time
+	AlertChannels       []string
+	Scope               string
+	TeamID              *int64 // set iff Scope == ScopeTeam
+	CreatedAt           time.Time
 }
 
 // StatusView is the API-facing shape for GET /v1/monitors (spec section 4).
@@ -54,6 +54,8 @@ type StatusView struct {
 	URL            string     `json:"url"`
 	Status         Status     `json:"status"`
 	Scope          string     `json:"scope"`
+	TeamID         *int64     `json:"team_id"`
+	TeamName       *string    `json:"team_name"`
 	LastCheckedAt  *time.Time `json:"last_checked_at"`
 	ResponseTimeMS *int       `json:"response_time_ms"`
 }

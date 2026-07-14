@@ -3,7 +3,27 @@ package com.pantawin.shared.model
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-// M6.1 team management: an invited email and whether an account exists yet.
+// M6.3: teams are plural and self-service — any account can create one and
+// belong to several.
+@Serializable
+data class Team(
+    val id: Long,
+    val name: String,
+    @SerialName("owner_id") val ownerId: Long,
+    @SerialName("created_at") val createdAt: String,
+)
+
+@Serializable
+data class TeamsResponse(
+    val teams: List<Team> = emptyList(),
+)
+
+@Serializable
+data class CreateTeamRequest(
+    val name: String,
+)
+
+// An invited email and whether an account has joined yet.
 @Serializable
 data class TeamMember(
     val email: String,
@@ -12,7 +32,7 @@ data class TeamMember(
 )
 
 @Serializable
-data class TeamList(
+data class TeamMembersResponse(
     val members: List<TeamMember> = emptyList(),
 )
 

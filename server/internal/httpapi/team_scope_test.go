@@ -11,60 +11,113 @@ import (
 	"testing"
 )
 
-// M6 exit criteria: a team-scoped monitor is visible and manageable by every
-// user, alerts fan out to every user's email, and personal monitors stay
-// isolated (covered by TestMonitorOwnershipIsolation).
+// M6/M6.3 exit criteria: a team-scoped monitor is visible and manageable by
+// every member of its specific team (and only that team), alerts fan out to
+// every member's email, and personal monitors stay isolated (covered by
+// TestMonitorOwnershipIsolation). Someone outside the team — even a
+// registered account — can't see it.
 func TestTeamMonitorSharedAccess(t *testing.T) {
 	env := newTestEnv(t)
 	alice := env.register(t, "alice@pantawin.test", "Correct-Horse-42-staple")
 	bob := env.register(t, "bob@pantawin.test", "Correct-Horse-42-staple")
+	outsider := env.register(t, "outsider@pantawin.test", "Correct-Horse-42-staple")
 
-	// Scope is validated.
-	resp := env.do(t, http.MethodPost, "/v1/monitors", alice.AccessToken, map[string]any{
+	resp := env.do(t, http.MethodPost, "/v1/teams", alice.AccessToken, map[string]any{"name": "Ops"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create team: expected 201, got %d", resp.StatusCode)
+	}
+	var teamID struct {
+		ID int64 `json:"id"`
+	}
+	json.NewDecoder(resp.Body).Decode(&teamID)
+	resp.Body.Close()
+
+	resp = env.do(t, http.MethodPost, fmt.Sprintf("/v1/teams/%d/members", teamID.ID), alice.AccessToken,
+		map[string]any{"email": "bob@pantawin.test"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("invite bob: expected 201, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Scope requires a matching team_id, and membership is enforced.
+	resp = env.do(t, http.MethodPost, "/v1/monitors", alice.AccessToken, map[string]any{
 		"url": "https://example.com", "scope": "everyone",
 	})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400 for bad scope, got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
+	resp = env.do(t, http.MethodPost, "/v1/monitors", alice.AccessToken, map[string]any{
+		"url": "https://example.com", "scope": "team",
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("team scope without team_id: expected 400, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+	resp = env.do(t, http.MethodPost, "/v1/monitors", outsider.AccessToken, map[string]any{
+		"url": "https://example.com", "scope": "team", "team_id": teamID.ID,
+	})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("team scope for a team you don't belong to: expected 403, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
 
 	// Alice creates a team monitor.
 	resp = env.do(t, http.MethodPost, "/v1/monitors", alice.AccessToken, map[string]any{
-		"url": "https://example.com", "name": "shared-prod", "scope": "team",
+		"url": "https://example.com", "name": "shared-prod", "scope": "team", "team_id": teamID.ID,
 	})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("expected 201 creating team monitor, got %d", resp.StatusCode)
 	}
 	var created struct {
-		ID    int64  `json:"id"`
-		Scope string `json:"scope"`
+		ID     int64  `json:"id"`
+		Scope  string `json:"scope"`
+		TeamID *int64 `json:"team_id"`
 	}
 	json.NewDecoder(resp.Body).Decode(&created)
 	resp.Body.Close()
-	if created.Scope != "team" {
-		t.Fatalf("created monitor scope = %q, want team", created.Scope)
+	if created.Scope != "team" || created.TeamID == nil || *created.TeamID != teamID.ID {
+		t.Fatalf("created monitor scope/team_id = %q/%v, want team/%d", created.Scope, created.TeamID, teamID.ID)
 	}
 
-	// Bob sees it in his list, tagged with its scope.
+	// Bob (a team member) sees it in his list, tagged with its team.
 	resp = env.do(t, http.MethodGet, "/v1/monitors", bob.AccessToken, nil)
 	var list []struct {
-		ID    int64  `json:"id"`
-		Scope string `json:"scope"`
+		ID     int64  `json:"id"`
+		Scope  string `json:"scope"`
+		TeamID *int64 `json:"team_id"`
 	}
 	json.NewDecoder(resp.Body).Decode(&list)
 	resp.Body.Close()
 	idx := slices.IndexFunc(list, func(v struct {
-		ID    int64  `json:"id"`
-		Scope string `json:"scope"`
+		ID     int64  `json:"id"`
+		Scope  string `json:"scope"`
+		TeamID *int64 `json:"team_id"`
 	}) bool {
 		return v.ID == created.ID
 	})
 	if idx < 0 {
 		t.Fatalf("bob's list is missing the team monitor (got %d monitors)", len(list))
 	}
-	if list[idx].Scope != "team" {
-		t.Errorf("team monitor scope in list = %q, want team", list[idx].Scope)
+
+	// Outsider (registered, but not on this team) does NOT see it.
+	resp = env.do(t, http.MethodGet, "/v1/monitors", outsider.AccessToken, nil)
+	json.NewDecoder(resp.Body).Decode(&list)
+	resp.Body.Close()
+	if slices.ContainsFunc(list, func(v struct {
+		ID     int64  `json:"id"`
+		Scope  string `json:"scope"`
+		TeamID *int64 `json:"team_id"`
+	}) bool {
+		return v.ID == created.ID
+	}) {
+		t.Fatal("outsider (not a team member) should not see the team monitor")
 	}
+	resp = env.do(t, http.MethodGet, fmt.Sprintf("/v1/monitors/%d", created.ID), outsider.AccessToken, nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("outsider GET team monitor: expected 404, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
 
 	// Bob can read, edit, pause, and see stats/incidents of the team monitor.
 	for _, probe := range []struct {
@@ -86,7 +139,7 @@ func TestTeamMonitorSharedAccess(t *testing.T) {
 		resp.Body.Close()
 	}
 
-	// Email fanout: the team monitor alerts both alice and bob.
+	// Email fanout: the team monitor alerts alice and bob, not the outsider.
 	_, emails, err := env.monitorRepo.AlertConfig(context.Background(), created.ID)
 	if err != nil {
 		t.Fatalf("AlertConfig: %v", err)
@@ -95,6 +148,9 @@ func TestTeamMonitorSharedAccess(t *testing.T) {
 		if !slices.Contains(emails, want) {
 			t.Errorf("team AlertConfig emails %v missing %s", emails, want)
 		}
+	}
+	if slices.Contains(emails, "outsider@pantawin.test") {
+		t.Errorf("team AlertConfig emails %v should not include the outsider", emails)
 	}
 
 	// A personal monitor still alerts only its owner.
@@ -118,15 +174,32 @@ func TestTeamMonitorSharedAccess(t *testing.T) {
 		t.Errorf("personal AlertConfig emails = %v, want [alice@pantawin.test]", emails)
 	}
 
-	// Scope can be flipped via PATCH; bob loses access once it's personal.
+	// Scope can be flipped via PATCH; bob loses access once it's personal,
+	// and team_id can't be left dangling (it must clear alongside scope).
 	resp = env.do(t, http.MethodPatch, fmt.Sprintf("/v1/monitors/%d", created.ID), alice.AccessToken, map[string]any{"scope": "personal"})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("PATCH scope->personal: expected 200, got %d", resp.StatusCode)
 	}
+	var afterFlip struct {
+		Scope  string `json:"scope"`
+		TeamID *int64 `json:"team_id"`
+	}
+	json.NewDecoder(resp.Body).Decode(&afterFlip)
 	resp.Body.Close()
+	if afterFlip.Scope != "personal" || afterFlip.TeamID != nil {
+		t.Errorf("after scope->personal: scope=%q team_id=%v, want personal/nil", afterFlip.Scope, afterFlip.TeamID)
+	}
 	resp = env.do(t, http.MethodGet, fmt.Sprintf("/v1/monitors/%d", created.ID), bob.AccessToken, nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("after scope->personal, bob GET: expected 404, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// team_id sent without scope is rejected, not silently ignored.
+	resp = env.do(t, http.MethodPatch, fmt.Sprintf("/v1/monitors/%d", personal.ID), alice.AccessToken,
+		map[string]any{"team_id": teamID.ID})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("team_id without scope change: expected 400, got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
 }

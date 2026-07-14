@@ -45,14 +45,15 @@ import androidx.compose.ui.unit.dp
 import com.pantawin.shared.model.TeamMember
 
 /**
- * Team management (M6.1, admin-only): invite teammates by email. Invited
- * people sign in with Google — no passwords to hand out. Non-admin accounts
- * get a read-only explanation.
+ * Member management for one team (M6.3): any current member — not just its
+ * creator — can invite teammates by email. Invited people sign in with
+ * Google — no passwords to hand out.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TeamScreen(
-    viewModel: TeamViewModel,
+fun TeamMembersScreen(
+    viewModel: TeamMembersViewModel,
+    teamName: String,
     onBack: () -> Unit,
 ) {
     val state by viewModel.state.collectAsState()
@@ -61,7 +62,7 @@ fun TeamScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Team members") },
+                title = { Text(teamName) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -76,7 +77,7 @@ fun TeamScreen(
                 modifier = Modifier.fillMaxSize().padding(padding),
             ) { CircularProgressIndicator() }
 
-            state.notAdmin -> Box(
+            state.notMember -> Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 40.dp),
             ) {
@@ -88,17 +89,10 @@ fun TeamScreen(
                         modifier = Modifier.size(48.dp),
                     )
                     Text(
-                        "Only the team admin can manage members",
+                        "You're no longer a member of this team",
                         style = MaterialTheme.typography.titleMedium,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(top = 16.dp),
-                    )
-                    Text(
-                        "Ask your admin to invite new teammates.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(top = 8.dp),
                     )
                 }
             }
@@ -106,7 +100,7 @@ fun TeamScreen(
             else -> Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
                 Text(
                     "Invited teammates sign in with Google — no passwords to share. " +
-                        "Team monitors and their alerts are visible to every member.",
+                        "This team's monitors and their alerts are visible to every member.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp),
@@ -118,8 +112,8 @@ fun TeamScreen(
                     OutlinedTextField(
                         value = email,
                         onValueChange = { email = it },
-                        label = { Text("Teammate's Google email") },
-                        placeholder = { Text("name@gmail.com") },
+                        label = { Text("Teammate's email") },
+                        placeholder = { Text("name@example.com") },
                         leadingIcon = { Icon(Icons.Outlined.Email, contentDescription = null) },
                         singleLine = true,
                         shape = MaterialTheme.shapes.medium,
@@ -159,7 +153,7 @@ fun TeamScreen(
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     items(state.members, key = { it.email }) { member ->
-                        MemberCard(member, onRemove = { viewModel.remove(member.email) })
+                        MemberCard(member, onRemove = { viewModel.removeInvite(member.email) })
                     }
                 }
             }

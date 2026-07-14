@@ -153,10 +153,11 @@ func newTestEnv(t *testing.T) *testEnv {
 	return buildTestEnv(t, false)
 }
 
-// newGatedTestEnv wires the M6.1 invite store (signup closed-by-default) and
-// bootstraps an admin account ("admin@pantawin.test" / "Admin-Pass-42") that
-// may manage the team. The plain newTestEnv leaves signup open so unrelated
-// tests can keep registering users freely.
+// newGatedTestEnv wires the invite store (signup closed-by-default) and
+// bootstraps a first account ("admin@pantawin.test" / "Admin-Pass-42") for
+// tests that exercise team creation/invites against a closed signup gate.
+// The plain newTestEnv leaves signup open so unrelated tests can keep
+// registering users freely.
 func newGatedTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 	return buildTestEnv(t, true)
@@ -196,11 +197,12 @@ func buildTestEnv(t *testing.T, gated bool) *testEnv {
 		return auth.GoogleIdentity{}, auth.ErrGoogleTokenInvalid
 	}
 	otp := newOTPCapture()
+	teamRepo := team.NewRepository(pool)
 	authService := auth.NewService(authRepo, issuer, refreshStore, 30*24*time.Hour).
 		WithGoogleVerifier(fakeGoogle).
-		WithOTPMailer(otp.mailer)
+		WithOTPMailer(otp.mailer).
+		WithOnUserCreated(teamRepo.ConsumeInvitesOnAccountCreated)
 
-	teamRepo := team.NewRepository(pool)
 	var adminID int64
 	if gated {
 		authService = authService.WithSignupAllowlistStore(teamRepo.Allowed)
@@ -228,7 +230,7 @@ func buildTestEnv(t *testing.T, gated bool) *testEnv {
 
 	deviceRepo := device.NewRepository(pool)
 	publisher := realtime.NewPublisher(redisClient)
-	wsHandler := realtime.NewHandler(redisClient, slog.Default())
+	wsHandler := realtime.NewHandler(redisClient, slog.Default(), teamRepo.TeamIDsForUser)
 
 	router := httpapi.NewRouter(httpapi.RouterDeps{
 		AuthService: authService,
@@ -242,7 +244,6 @@ func buildTestEnv(t *testing.T, gated bool) *testEnv {
 		Rollup:       analytics.NewRollup(pool, slog.Default()),
 		IncidentRepo: incident.NewRepository(pool),
 		TeamRepo:     teamRepo,
-		AdminUserID:  adminID,
 	})
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
