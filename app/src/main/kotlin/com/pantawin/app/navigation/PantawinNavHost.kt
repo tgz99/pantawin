@@ -17,6 +17,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.navigation.navDeepLink
 import com.pantawin.app.PantawinApp
+import com.pantawin.app.about.AboutScreen
 import com.pantawin.app.auth.AuthViewModel
 import com.pantawin.app.auth.ChangePasswordScreen
 import com.pantawin.app.auth.ChangePasswordViewModel
@@ -42,6 +43,7 @@ private object Routes {
     const val Monitors = "monitors"
     const val Add = "add"
     const val ChangePassword = "change-password"
+    const val About = "about"
     const val Detail = "monitor/{id}"
     const val Incidents = "monitor/{id}/incidents"
 
@@ -114,6 +116,7 @@ fun PantawinNavHost(session: SessionManager) {
                 onAdd = { navController.navigate(Routes.Add) },
                 onOpen = { id -> navController.navigate(Routes.detail(id)) },
                 onChangePassword = { navController.navigate(Routes.ChangePassword) },
+                onAbout = { navController.navigate(Routes.About) },
                 onLogout = { vm.viewModelScope.launch { session.logout() } },
                 showPushDegradedBanner = pushDegraded,
             )
@@ -142,6 +145,9 @@ fun PantawinNavHost(session: SessionManager) {
                 viewModel = vm,
                 onBack = { navController.popBackStack() },
             )
+        }
+        composable(Routes.About) {
+            AboutScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.ChangePassword) {
             val vm: ChangePasswordViewModel = viewModel(factory = factory { ChangePasswordViewModel(session) })

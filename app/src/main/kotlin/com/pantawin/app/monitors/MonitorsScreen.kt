@@ -18,12 +18,16 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.MonitorHeart
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -66,9 +70,11 @@ fun MonitorsScreen(
     onLogout: () -> Unit,
     onOpen: (Long) -> Unit = {},
     onChangePassword: () -> Unit = {},
+    onAbout: () -> Unit = {},
     showPushDegradedBanner: Boolean = false,
 ) {
     val state by viewModel.uiState.collectAsState()
+    var menuOpen by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -88,11 +94,36 @@ fun MonitorsScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onChangePassword) {
-                        Icon(Icons.Outlined.Key, contentDescription = "Change password")
+                    // Overflow menu: settings-ish actions live here so the
+                    // bar stays clean as items accrue (M5 adds About).
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "Menu")
                     }
-                    IconButton(onClick = onLogout) {
-                        Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "Log out")
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Change password") },
+                            leadingIcon = { Icon(Icons.Outlined.Key, contentDescription = null) },
+                            onClick = {
+                                menuOpen = false
+                                onChangePassword()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("About") },
+                            leadingIcon = { Icon(Icons.Outlined.Info, contentDescription = null) },
+                            onClick = {
+                                menuOpen = false
+                                onAbout()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Log out") },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null) },
+                            onClick = {
+                                menuOpen = false
+                                onLogout()
+                            },
+                        )
                     }
                 },
             )

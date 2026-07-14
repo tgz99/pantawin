@@ -27,6 +27,16 @@ val secrets = Properties().apply {
     }
 }
 
+// Release signing (gitignored, see creds/): generated 2026-07-14; losing the
+// keystore means release builds can never update the installed app again —
+// back creds/ up somewhere safe. Absent (e.g. CI), release stays unsigned.
+val keystorePropsFile = rootProject.file("creds/keystore.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) {
+        keystorePropsFile.inputStream().use { load(it) }
+    }
+}
+
 android {
     namespace = "com.pantawin.app"
     compileSdk = 37
@@ -35,8 +45,8 @@ android {
         applicationId = "com.pantawin.app"
         minSdk = 30
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.0.0" // M5: analytics v2 + incident history
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -56,10 +66,27 @@ android {
         buildConfigField("String", "FIREBASE_SENDER_ID", "\"${secrets.getProperty("FIREBASE_SENDER_ID", "")}\"")
     }
 
+    signingConfigs {
+        if (keystorePropsFile.exists()) {
+            create("release") {
+                storeFile = rootProject.file("creds/" + File(keystoreProps.getProperty("storeFile")).name)
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            optimization {
-                enable = false
+            // R8 + resource shrinking keep the daily-driver APK lean.
+            // (classic DSL: AGP 9's optimization.enable is still gated
+            // behind the android.r8.gradual.support flag)
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (keystorePropsFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
             }
         }
     }
@@ -70,6 +97,11 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+    androidResources {
+        // The app is English-only; drop the dozens of translated resource
+        // sets that AndroidX/Material/Play-services libraries would ship.
+        localeFilters += "en"
     }
 }
 
