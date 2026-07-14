@@ -42,3 +42,4 @@ creds/
 **/out/failures/
 .claude/
 .idea/
+/dist/
