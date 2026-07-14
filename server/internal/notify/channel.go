@@ -22,8 +22,9 @@ type IncidentEvent struct {
 	MonitorName  string
 	MonitorURL   string
 	EventType    EventType
-	Cause        string        // error_type on DOWN
+	Cause        string        // error_type on DOWN (and the original cause on RECOVERED)
 	At           time.Time
+	StartedAt    time.Time     // incident start (zero on payloads queued before this field existed)
 	DownDuration time.Duration // populated on RECOVERED
 	DeepLink     string        // pantawin://monitor/{id}
 }

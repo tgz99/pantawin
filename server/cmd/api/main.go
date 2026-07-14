@@ -230,7 +230,8 @@ func handleTransition(
 		}
 		event := notify.IncidentEvent{
 			IncidentID: inc.ID, MonitorID: m.ID, MonitorName: m.Name, MonitorURL: m.URL,
-			EventType: notify.EventDown, Cause: cause, At: time.Now(), DeepLink: deepLink,
+			EventType: notify.EventDown, Cause: cause, At: time.Now(),
+			StartedAt: inc.StartedAt, DeepLink: deepLink,
 		}
 		if err := dispatcher.Enqueue(ctx, event); err != nil {
 			logger.Error("transition: failed to enqueue DOWN alert", "monitor_id", m.ID, "error", err)
@@ -249,7 +250,8 @@ func handleTransition(
 		}
 		event := notify.IncidentEvent{
 			IncidentID: inc.ID, MonitorID: m.ID, MonitorName: m.Name, MonitorURL: m.URL,
-			EventType: notify.EventRecovered, At: time.Now(), DownDuration: downtime, DeepLink: deepLink,
+			EventType: notify.EventRecovered, Cause: inc.Cause, At: time.Now(),
+			StartedAt: inc.StartedAt, DownDuration: downtime, DeepLink: deepLink,
 		}
 		if err := dispatcher.Enqueue(ctx, event); err != nil {
 			logger.Error("transition: failed to enqueue RECOVERED alert", "monitor_id", m.ID, "error", err)

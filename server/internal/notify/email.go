@@ -39,7 +39,9 @@ func (c *EmailChannel) Send(ctx context.Context, event IncidentEvent, target Cha
 	if target.Email == "" {
 		return fmt.Errorf("email channel: empty target address")
 	}
-	content, err := renderEmail(event)
+	// Best-effort target IP + geolocation; "" on failure just omits the rows.
+	ip, location := lookupTarget(ctx, event.MonitorURL)
+	content, err := renderEmail(event, ip, location)
 	if err != nil {
 		return fmt.Errorf("render email: %w", err)
 	}
