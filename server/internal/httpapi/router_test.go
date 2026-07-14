@@ -36,6 +36,7 @@ import (
 	"github.com/tgz99/pantawin/server/internal/realtime"
 	"github.com/tgz99/pantawin/server/internal/scheduler"
 	"github.com/tgz99/pantawin/server/internal/ssrf"
+	"github.com/tgz99/pantawin/server/internal/team"
 )
 
 func startPostgres(t *testing.T) string {
@@ -119,9 +120,24 @@ type testEnv struct {
 	sched       *scheduler.Scheduler
 	issuer      *auth.TokenIssuer
 	publisher   *realtime.Publisher
+	adminID     int64 // only set by newGatedTestEnv
 }
 
 func newTestEnv(t *testing.T) *testEnv {
+	t.Helper()
+	return buildTestEnv(t, false)
+}
+
+// newGatedTestEnv wires the M6.1 invite store (signup closed-by-default) and
+// bootstraps an admin account ("admin@pantawin.test" / "Admin-Pass-42") that
+// may manage the team. The plain newTestEnv leaves signup open so unrelated
+// tests can keep registering users freely.
+func newGatedTestEnv(t *testing.T) *testEnv {
+	t.Helper()
+	return buildTestEnv(t, true)
+}
+
+func buildTestEnv(t *testing.T, gated bool) *testEnv {
 	t.Helper()
 	ctx := context.Background()
 
@@ -154,6 +170,21 @@ func newTestEnv(t *testing.T) *testEnv {
 	authService := auth.NewService(authRepo, issuer, refreshStore, 30*24*time.Hour).
 		WithGoogleVerifier(fakeGoogle)
 
+	teamRepo := team.NewRepository(pool)
+	var adminID int64
+	if gated {
+		authService = authService.WithSignupAllowlistStore(teamRepo.Allowed)
+		hash, err := auth.HashPassword("Admin-Pass-42")
+		if err != nil {
+			t.Fatalf("hash admin password: %v", err)
+		}
+		admin, err := authRepo.CreateUser(ctx, "admin@pantawin.test", hash)
+		if err != nil {
+			t.Fatalf("create admin user: %v", err)
+		}
+		adminID = admin.ID
+	}
+
 	monitorRepo := monitor.NewRepository(pool)
 
 	// Guard with a permissive resolver + loopback allowance: URL-scheme and
@@ -180,6 +211,8 @@ func newTestEnv(t *testing.T) *testEnv {
 		Redis:        redisClient,
 		Rollup:       analytics.NewRollup(pool, slog.Default()),
 		IncidentRepo: incident.NewRepository(pool),
+		TeamRepo:     teamRepo,
+		AdminUserID:  adminID,
 	})
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
@@ -187,6 +220,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	return &testEnv{
 		server: server, pool: pool, redisClient: redisClient,
 		monitorRepo: monitorRepo, sched: sched, issuer: issuer, publisher: publisher,
+		adminID: adminID,
 	}
 }
 

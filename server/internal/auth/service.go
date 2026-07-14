@@ -26,22 +26,30 @@ type Service struct {
 	refreshStore    *RefreshStore
 	refreshTokenTTL time.Duration
 	googleVerify    GoogleVerifier // nil = Google sign-in dormant
-	signupAllowlist []string       // empty = open signup (pre-M6 behavior)
+	signupAllowlist []string
+	// allowlistStore consults the DB-backed team invite list (M6.1). When
+	// wired, signup is closed-by-default: only env entries or invited emails
+	// may create accounts.
+	allowlistStore func(ctx context.Context, email string) (bool, error)
 }
 
 // WithSignupAllowlist restricts NEW account creation (register + Google
 // find-or-create) to the given entries: exact emails ("a@b.com") or whole
-// domains ("@b.com"). Existing accounts always keep working. Empty list =
-// signup stays open.
+// domains ("@b.com"). Existing accounts always keep working.
 func (s *Service) WithSignupAllowlist(entries []string) *Service {
 	s.signupAllowlist = entries
 	return s
 }
 
-func (s *Service) signupAllowed(email string) bool {
-	if len(s.signupAllowlist) == 0 {
-		return true
-	}
+// WithSignupAllowlistStore wires the in-app team invite list (M6.1). Once a
+// store is set, signup is closed to anyone who is neither in the env
+// allowlist nor invited — even when both lists are empty.
+func (s *Service) WithSignupAllowlistStore(store func(ctx context.Context, email string) (bool, error)) *Service {
+	s.allowlistStore = store
+	return s
+}
+
+func (s *Service) signupAllowed(ctx context.Context, email string) (bool, error) {
 	lower := strings.ToLower(strings.TrimSpace(email))
 	for _, entry := range s.signupAllowlist {
 		entry = strings.ToLower(strings.TrimSpace(entry))
@@ -50,13 +58,17 @@ func (s *Service) signupAllowed(email string) bool {
 		}
 		if strings.HasPrefix(entry, "@") {
 			if strings.HasSuffix(lower, entry) {
-				return true
+				return true, nil
 			}
 		} else if lower == entry {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	if s.allowlistStore != nil {
+		return s.allowlistStore(ctx, lower)
+	}
+	// No store wired (pre-M6.1 shape): empty env list means open signup.
+	return len(s.signupAllowlist) == 0, nil
 }
 
 func NewService(repo *Repository, issuer *TokenIssuer, refreshStore *RefreshStore, refreshTTL time.Duration) *Service {
@@ -64,7 +76,11 @@ func NewService(repo *Repository, issuer *TokenIssuer, refreshStore *RefreshStor
 }
 
 func (s *Service) Register(ctx context.Context, email, password string) (Tokens, error) {
-	if !s.signupAllowed(email) {
+	allowed, err := s.signupAllowed(ctx, email)
+	if err != nil {
+		return Tokens{}, fmt.Errorf("check signup allowlist: %w", err)
+	}
+	if !allowed {
 		return Tokens{}, ErrSignupNotAllowed
 	}
 	if err := ValidatePasswordPolicy(password); err != nil {

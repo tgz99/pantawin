@@ -73,7 +73,11 @@ func (s *Service) GoogleLogin(ctx context.Context, rawIDToken string) (Tokens, e
 	if errors.Is(err, ErrUserNotFound) {
 		// The allowlist gates only NEW accounts — existing users (however
 		// they registered) can always sign in with Google.
-		if !s.signupAllowed(identity.Email) {
+		allowed, allowErr := s.signupAllowed(ctx, identity.Email)
+		if allowErr != nil {
+			return Tokens{}, fmt.Errorf("check signup allowlist: %w", allowErr)
+		}
+		if !allowed {
 			return Tokens{}, ErrSignupNotAllowed
 		}
 		hash, hashErr := HashPassword(randomPassword())

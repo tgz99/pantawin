@@ -41,3 +41,28 @@ func TestSignupAllowlist(t *testing.T) {
 		})
 	}
 }
+
+// With the invite store wired (M6.1), signup is closed-by-default: only env
+// entries or store-approved (invited) emails get through.
+func TestSignupAllowlistStore(t *testing.T) {
+	store := func(_ context.Context, email string) (bool, error) {
+		return email == "invited@corp.com", nil
+	}
+
+	svc := NewService(nil, nil, nil, 0).WithSignupAllowlistStore(store)
+
+	if _, err := svc.Register(context.Background(), "stranger@evil.com", "weak"); !errors.Is(err, ErrSignupNotAllowed) {
+		t.Errorf("uninvited email with store wired: expected ErrSignupNotAllowed, got %v", err)
+	}
+	if _, err := svc.Register(context.Background(), "Invited@Corp.com", "weak"); !errors.Is(err, ErrWeakPassword) {
+		t.Errorf("invited email should pass the gate (case-insensitive), got %v", err)
+	}
+
+	// Env entries still work alongside the store.
+	svc = NewService(nil, nil, nil, 0).
+		WithSignupAllowlist([]string{"@corp.com"}).
+		WithSignupAllowlistStore(func(context.Context, string) (bool, error) { return false, nil })
+	if _, err := svc.Register(context.Background(), "env@corp.com", "weak"); !errors.Is(err, ErrWeakPassword) {
+		t.Errorf("env-allowlisted email should pass despite store denial, got %v", err)
+	}
+}

@@ -18,6 +18,10 @@ import androidx.navigation.navArgument
 import androidx.navigation.navDeepLink
 import com.pantawin.app.PantawinApp
 import com.pantawin.app.about.AboutScreen
+import com.pantawin.app.data.SessionTeamGateway
+import com.pantawin.app.data.TeamGateway
+import com.pantawin.app.team.TeamScreen
+import com.pantawin.app.team.TeamViewModel
 import com.pantawin.app.auth.AuthViewModel
 import com.pantawin.app.auth.ChangePasswordScreen
 import com.pantawin.app.auth.ChangePasswordViewModel
@@ -44,6 +48,7 @@ private object Routes {
     const val Add = "add"
     const val ChangePassword = "change-password"
     const val About = "about"
+    const val Team = "team"
     const val Detail = "monitor/{id}"
     const val Incidents = "monitor/{id}/incidents"
 
@@ -83,6 +88,7 @@ fun PantawinNavHost(session: SessionManager) {
     val pushDegraded = if (app.pushEnabled) !rememberNotificationPermissionState().granted else false
 
     val gateway: MonitorGateway = SessionMonitorGateway(session)
+    val teamGateway: TeamGateway = SessionTeamGateway(session)
     val navController = rememberNavController()
 
     // Live WebSocket feed (spec 6.4): cold flow that connects on collect and
@@ -117,6 +123,7 @@ fun PantawinNavHost(session: SessionManager) {
                 onOpen = { id -> navController.navigate(Routes.detail(id)) },
                 onChangePassword = { navController.navigate(Routes.ChangePassword) },
                 onAbout = { navController.navigate(Routes.About) },
+                onTeam = { navController.navigate(Routes.Team) },
                 onLogout = { vm.viewModelScope.launch { session.logout() } },
                 showPushDegradedBanner = pushDegraded,
             )
@@ -148,6 +155,10 @@ fun PantawinNavHost(session: SessionManager) {
         }
         composable(Routes.About) {
             AboutScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.Team) {
+            val vm: TeamViewModel = viewModel(factory = factory { TeamViewModel(teamGateway) })
+            TeamScreen(viewModel = vm, onBack = { navController.popBackStack() })
         }
         composable(Routes.ChangePassword) {
             val vm: ChangePasswordViewModel = viewModel(factory = factory { ChangePasswordViewModel(session) })

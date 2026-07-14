@@ -15,6 +15,7 @@ import (
 	"github.com/tgz99/pantawin/server/internal/monitor"
 	"github.com/tgz99/pantawin/server/internal/realtime"
 	"github.com/tgz99/pantawin/server/internal/ssrf"
+	"github.com/tgz99/pantawin/server/internal/team"
 )
 
 type RouterDeps struct {
@@ -28,6 +29,10 @@ type RouterDeps struct {
 	Redis        *redis.Client
 	Rollup       *analytics.Rollup
 	IncidentRepo *incident.Repository
+	// M6.1 team management. TeamRepo may be nil in tests that don't exercise
+	// it; AdminUserID is the only account allowed to manage the team.
+	TeamRepo    *team.Repository
+	AdminUserID int64
 }
 
 func NewRouter(deps RouterDeps) http.Handler {
@@ -86,6 +91,15 @@ func NewRouter(deps RouterDeps) http.Handler {
 			})
 
 			r.Post("/devices", deviceH.register)
+
+			if deps.TeamRepo != nil {
+				teamH := &teamHandlers{repo: deps.TeamRepo, adminUserID: deps.AdminUserID}
+				r.Route("/team", func(r chi.Router) {
+					r.Get("/", teamH.list)
+					r.Post("/", teamH.add)
+					r.Post("/remove", teamH.remove)
+				})
+			}
 		})
 	})
 

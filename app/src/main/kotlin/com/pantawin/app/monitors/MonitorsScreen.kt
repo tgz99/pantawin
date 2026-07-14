@@ -73,6 +73,7 @@ fun MonitorsScreen(
     onOpen: (Long) -> Unit = {},
     onChangePassword: () -> Unit = {},
     onAbout: () -> Unit = {},
+    onTeam: () -> Unit = {},
     showPushDegradedBanner: Boolean = false,
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -108,6 +109,14 @@ fun MonitorsScreen(
                             onClick = {
                                 menuOpen = false
                                 onChangePassword()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Team members") },
+                            leadingIcon = { Icon(Icons.Outlined.Groups, contentDescription = null) },
+                            onClick = {
+                                menuOpen = false
+                                onTeam()
                             },
                         )
                         DropdownMenuItem(

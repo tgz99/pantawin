@@ -5,6 +5,8 @@ import com.pantawin.shared.model.Monitor
 import com.pantawin.shared.model.MonitorInput
 import com.pantawin.shared.model.MonitorStats
 import com.pantawin.shared.model.MonitorStatus
+import com.pantawin.shared.model.TeamList
+import com.pantawin.shared.model.TeamMemberInput
 import com.pantawin.shared.model.Tokens
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -135,6 +137,28 @@ class PantawinApiClient(
     suspend fun resumeMonitor(accessToken: String, id: Long): Monitor =
         client.post("$baseUrl/v1/monitors/$id/resume") { bearer(accessToken) }
             .requireSuccess().body()
+
+    // --- Team management (M6.1, admin-only server-side) ---
+
+    suspend fun getTeam(accessToken: String): TeamList =
+        client.get("$baseUrl/v1/team") { bearer(accessToken) }
+            .requireSuccess().body()
+
+    suspend fun addTeamMember(accessToken: String, email: String) {
+        client.post("$baseUrl/v1/team") {
+            bearer(accessToken)
+            contentType(ContentType.Application.Json)
+            setBody(TeamMemberInput(email))
+        }.requireSuccess()
+    }
+
+    suspend fun removeTeamMember(accessToken: String, email: String) {
+        client.post("$baseUrl/v1/team/remove") {
+            bearer(accessToken)
+            contentType(ContentType.Application.Json)
+            setBody(TeamMemberInput(email))
+        }.requireSuccess()
+    }
 
     // --- Devices (M3 push) ---
 

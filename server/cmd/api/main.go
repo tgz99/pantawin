@@ -32,6 +32,7 @@ import (
 	"github.com/tgz99/pantawin/server/internal/realtime"
 	"github.com/tgz99/pantawin/server/internal/scheduler"
 	"github.com/tgz99/pantawin/server/internal/ssrf"
+	"github.com/tgz99/pantawin/server/internal/team"
 )
 
 const migrationsDir = "migrations"
@@ -78,14 +79,15 @@ func run(logger *slog.Logger) error {
 
 	issuer := auth.NewTokenIssuer(cfg.JWTSecret, cfg.AccessTokenTTL, cfg.RefreshTokenTTL)
 	refreshStore := auth.NewRefreshStore(pool)
+	// M6.1: signup is closed-by-default — only emails invited in-app by the
+	// admin (signup_allowlist table) or listed in SIGNUP_ALLOWLIST may create
+	// accounts. Existing accounts are unaffected.
+	teamRepo := team.NewRepository(pool)
 	authService := auth.NewService(authRepo, issuer, refreshStore, cfg.RefreshTokenTTL).
 		WithGoogleVerifier(auth.NewGoogleVerifier(cfg.GoogleClientID)).
-		WithSignupAllowlist(cfg.SignupAllowlist)
-	if len(cfg.SignupAllowlist) > 0 {
-		logger.Info("signup restricted to allowlist", "entries", len(cfg.SignupAllowlist))
-	} else {
-		logger.Warn("signup is OPEN — set SIGNUP_ALLOWLIST before using team monitors")
-	}
+		WithSignupAllowlist(cfg.SignupAllowlist).
+		WithSignupAllowlistStore(teamRepo.Allowed)
+	logger.Info("signup gated by team invites", "env_entries", len(cfg.SignupAllowlist))
 	if cfg.GoogleClientID != "" {
 		logger.Info("google sign-in enabled")
 	} else {
@@ -186,6 +188,8 @@ func run(logger *slog.Logger) error {
 		Redis:        redisClient,
 		Rollup:       rollup,
 		IncidentRepo: incidentRepo,
+		TeamRepo:     teamRepo,
+		AdminUserID:  adminUser.ID,
 	})
 
 	server := &http.Server{
