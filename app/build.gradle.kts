@@ -45,8 +45,8 @@ android {
         applicationId = "com.pantawin.app"
         minSdk = 30
         targetSdk = 37
-        versionCode = 7
-        versionName = "1.4.1" // Alert push reliability: full-screen intent + battery exemption
+        versionCode = 8
+        versionName = "1.4.2" // Alert reliability: Do Not Disturb bypass fix-it banner
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
