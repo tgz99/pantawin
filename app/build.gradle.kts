@@ -45,8 +45,8 @@ android {
         applicationId = "com.pantawin.app"
         minSdk = 30
         targetSdk = 37
-        versionCode = 6
-        versionName = "1.4.0" // M6.3: multi-team model (join/own many teams)
+        versionCode = 7
+        versionName = "1.4.1" // Alert push reliability: full-screen intent + battery exemption
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
