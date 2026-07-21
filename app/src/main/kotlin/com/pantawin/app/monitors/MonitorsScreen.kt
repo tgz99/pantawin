@@ -53,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import com.pantawin.app.push.BatteryOptimizationBanner
 import com.pantawin.app.push.DegradedBanner
 import com.pantawin.app.ui.EmptyState
 import com.pantawin.app.ui.ErrorState
@@ -75,6 +76,8 @@ fun MonitorsScreen(
     onAbout: () -> Unit = {},
     onTeam: () -> Unit = {},
     showPushDegradedBanner: Boolean = false,
+    showReliabilityBanner: Boolean = false,
+    onFixReliability: () -> Unit = {},
 ) {
     val state by viewModel.uiState.collectAsState()
     var menuOpen by remember { mutableStateOf(false) }
@@ -149,6 +152,7 @@ fun MonitorsScreen(
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             if (showPushDegradedBanner) DegradedBanner()
+            if (showReliabilityBanner) BatteryOptimizationBanner(onRequestExemption = onFixReliability)
             when (val s = state) {
                 is MonitorsUiState.Loading -> LoadingState()
                 is MonitorsUiState.Error -> ErrorState(s.message, onRetry = viewModel::refresh)

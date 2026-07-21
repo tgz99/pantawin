@@ -39,6 +39,10 @@ import com.pantawin.app.monitors.MonitorDetailScreen
 import com.pantawin.app.monitors.MonitorDetailViewModel
 import com.pantawin.app.monitors.MonitorsScreen
 import com.pantawin.app.monitors.MonitorsViewModel
+import com.pantawin.app.push.batteryOptimizationExemptionIntent
+import com.pantawin.app.push.fullScreenIntentSettingsIntent
+import com.pantawin.app.push.rememberBatteryOptimizationState
+import com.pantawin.app.push.rememberFullScreenIntentState
 import com.pantawin.app.push.rememberNotificationPermissionState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.emitAll
@@ -82,7 +86,8 @@ fun PantawinNavHost(session: SessionManager) {
         return
     }
 
-    val app = LocalContext.current.applicationContext as PantawinApp
+    val context = LocalContext.current
+    val app = context.applicationContext as PantawinApp
 
     // Register this device's FCM token once per login (no-op while push is
     // dormant; onNewToken keeps it fresh afterwards).
@@ -91,6 +96,20 @@ fun PantawinNavHost(session: SessionManager) {
     // Ask for POST_NOTIFICATIONS only when push can actually deliver; if
     // denied, the dashboard shows the degraded banner (spec M3).
     val pushDegraded = if (app.pushEnabled) !rememberNotificationPermissionState().granted else false
+
+    // Even with the permission granted, several OEMs still silently drop
+    // background FCM delivery under battery optimization, or (Android 14+)
+    // require a separate full-screen-intent grant for the DOWN alert to wake
+    // the screen. Surface a fix-it banner rather than leaving alerts
+    // unexplainably flaky.
+    val batteryExempt = rememberBatteryOptimizationState().ignoring
+    val fullScreenAllowed = rememberFullScreenIntentState().allowed
+    val showReliabilityBanner = app.pushEnabled && !pushDegraded && (!batteryExempt || !fullScreenAllowed)
+    val onFixReliability: () -> Unit = {
+        context.startActivity(
+            if (!batteryExempt) batteryOptimizationExemptionIntent(context) else fullScreenIntentSettingsIntent(context),
+        )
+    }
 
     val gateway: MonitorGateway = SessionMonitorGateway(session)
     val teamGateway: TeamGateway = SessionTeamGateway(session)
@@ -131,6 +150,8 @@ fun PantawinNavHost(session: SessionManager) {
                 onTeam = { navController.navigate(Routes.Teams) },
                 onLogout = { vm.viewModelScope.launch { session.logout() } },
                 showPushDegradedBanner = pushDegraded,
+                showReliabilityBanner = showReliabilityBanner,
+                onFixReliability = onFixReliability,
             )
         }
         composable(

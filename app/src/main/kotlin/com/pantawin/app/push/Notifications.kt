@@ -6,10 +6,12 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import com.pantawin.app.MainActivity
 import com.pantawin.app.R
 
 /**
@@ -64,10 +66,15 @@ object Notifications {
         ensureChannels(context)
 
         val channel = if (isDown) CHANNEL_DOWN else CHANNEL_RECOVERY
-        // Deep link into the monitor detail via pantawin://monitor/{id}.
+        // Deep link into the monitor detail via pantawin://monitor/{id}. For a
+        // DOWN alert this same intent also backs the full-screen intent below,
+        // so it carries EXTRA_ALERT to make MainActivity wake/show over the
+        // lock screen (spec: alerts must not be missable).
         val intent = monitorId?.let {
             Intent(Intent.ACTION_VIEW, Uri.parse("pantawin://monitor/$it")).apply {
                 setPackage(context.packageName)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                if (isDown) putExtra(MainActivity.EXTRA_ALERT, true)
             }
         }
         val pending = intent?.let {
@@ -82,7 +89,7 @@ object Notifications {
             if (isDown) R.color.status_down else R.color.status_up,
         )
 
-        val notification = NotificationCompat.Builder(context, channel)
+        val builder = NotificationCompat.Builder(context, channel)
             .setSmallIcon(R.drawable.ic_stat_alert)
             .setColor(accent)
             .setContentTitle(title)
@@ -90,8 +97,23 @@ object Notifications {
             .setAutoCancel(true)
             .setPriority(if (isDown) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_DEFAULT)
             .setCategory(if (isDown) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_STATUS)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .apply { pending?.let { setContentIntent(it) } }
-            .build()
+
+        // Full-screen intent: makes a DOWN alert take over the screen like an
+        // incoming call/alarm, even locked or under Do-Not-Disturb — the
+        // regular heads-up notification is easy to miss on some OEM skins
+        // that throttle it. Requires USE_FULL_SCREEN_INTENT; on Android 14+
+        // the user must additionally grant it (see NotificationPermission.kt),
+        // so fall back to the plain high-priority notification if not granted.
+        val mgr = context.getSystemService(NotificationManager::class.java)
+        if (isDown && pending != null) {
+            val allowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE ||
+                mgr.canUseFullScreenIntent()
+            if (allowed) builder.setFullScreenIntent(pending, true)
+        }
+
+        val notification = builder.build()
 
         // POST_NOTIFICATIONS is checked by the caller / gracefully handled;
         // NotificationManagerCompat.notify no-ops without permission on 13+.

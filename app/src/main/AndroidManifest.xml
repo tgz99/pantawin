@@ -5,6 +5,14 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Runtime permission on Android 13+ (handled in-app with a rationale). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Lets a DOWN alert launch full-screen over the lock screen, like an
+         incoming call/alarm. Granted automatically pre-14; on 14+ the user
+         must flip it on in Settings (requested in-app, see NotificationPermission.kt). -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- Lets the app ask to be exempted from battery-optimization killing —
+         several OEMs (Samsung, Xiaomi, Oppo) suspend background FCM delivery
+         otherwise, which is why alerts silently never arrive on some devices. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:name=".PantawinApp"
@@ -50,7 +58,7 @@
             android:resource="@drawable/ic_stat_alert" />
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="downtime_alerts" />
+            android:value="downtime_alerts_v2" />
 
     </application>
 
