@@ -157,6 +157,50 @@ fun rememberFullScreenIntentState(): FullScreenIntentState {
 data class FullScreenIntentState(val allowed: Boolean)
 
 /**
+ * The DOWN channel declares setBypassDnd(true) (see Notifications.kt), but
+ * Android only honors that once the user separately grants "Do Not Disturb
+ * access" — a sensitive, app-level permission with no runtime dialog (unlike
+ * POST_NOTIFICATIONS); it's only grantable from the system settings screen.
+ * Without it, DND silently swallows the alert exactly like Android would
+ * swallow any other notification, alarm-grade channel or not.
+ */
+fun isDndAccessGranted(context: Context): Boolean {
+    val mgr = context.getSystemService(NotificationManager::class.java) ?: return false
+    // The DOWN channel's own bypass flag is the ground truth for whether
+    // alerts actually survive Do Not Disturb. isNotificationPolicyAccessGranted()
+    // was confirmed unreliable on a Samsung One UI device — it reported true
+    // while the channel's real bypassDnd stayed false (verified via
+    // `dumpsys notification`) and alerts were still silenced. bypassDnd is
+    // re-evaluated against the current access grant every time the channel
+    // is (re)created, so re-run ensureChannels first to pick up a grant that
+    // happened since the app last started.
+    Notifications.ensureChannels(context)
+    return mgr.getNotificationChannel(Notifications.CHANNEL_DOWN)?.canBypassDnd() == true
+}
+
+/** No app-specific deep link exists for this screen — it's a flat allow-list. */
+fun dndAccessSettingsIntent(): Intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
+
+@Composable
+fun rememberDndAccessState(): DndAccessState {
+    val context = LocalContext.current
+    var granted by remember { mutableStateOf(isDndAccessGranted(context)) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                granted = isDndAccessGranted(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    return DndAccessState(granted)
+}
+
+data class DndAccessState(val granted: Boolean)
+
+/**
  * Prompts the user to exempt the app from battery optimization so downtime
  * pushes keep arriving in the background. Only shown once push is otherwise
  * working (permission granted) and the OS hasn't already exempted the app.
@@ -171,7 +215,7 @@ fun BatteryOptimizationBanner(onRequestExemption: () -> Unit, modifier: Modifier
             modifier = Modifier.fillMaxWidth().padding(start = 12.dp),
         ) {
             Text(
-                "Alerts may be delayed or missed on this device unless background activity is allowed.",
+                "Alerts may be delayed, missed, or silenced on this device unless a few settings are allowed.",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(vertical = 12.dp).weight(1f),
             )

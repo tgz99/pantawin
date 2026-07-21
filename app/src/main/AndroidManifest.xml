@@ -13,6 +13,10 @@
          several OEMs (Samsung, Xiaomi, Oppo) suspend background FCM delivery
          otherwise, which is why alerts silently never arrive on some devices. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Backs the downtime channel's setBypassDnd(true) — without the user
+         separately granting Do Not Disturb access (Settings, no runtime
+         dialog), Android ignores that flag and DND silences the alert. -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
 
     <application
         android:name=".PantawinApp"
