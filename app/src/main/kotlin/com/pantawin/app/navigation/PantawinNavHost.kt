@@ -59,10 +59,11 @@ private object Routes {
     const val Teams = "teams"
     const val TeamMembers = "teams/{id}/members/{name}"
     const val Detail = "monitor/{id}"
-    const val Incidents = "monitor/{id}/incidents"
+    const val Incidents = "monitor/{id}/incidents/{name}"
 
     fun detail(id: Long) = "monitor/$id"
-    fun incidents(id: Long) = "monitor/$id/incidents"
+    fun incidents(id: Long, name: String) =
+        "monitor/$id/incidents/${java.net.URLEncoder.encode(name, "UTF-8")}"
     fun teamMembers(id: Long, name: String) =
         "teams/$id/members/${java.net.URLEncoder.encode(name, "UTF-8")}"
 }
@@ -174,17 +175,23 @@ fun PantawinNavHost(session: SessionManager) {
             MonitorDetailScreen(
                 viewModel = vm,
                 onBack = { navController.popBackStack() },
-                onViewIncidents = { navController.navigate(Routes.incidents(id)) },
+                onViewIncidents = { name -> navController.navigate(Routes.incidents(id, name)) },
             )
         }
         composable(
             route = Routes.Incidents,
-            arguments = listOf(navArgument("id") { type = NavType.LongType }),
+            arguments = listOf(
+                navArgument("id") { type = NavType.LongType },
+                navArgument("name") { type = NavType.StringType },
+            ),
         ) { entry ->
             val id = entry.arguments?.getLong("id") ?: return@composable
+            val encodedName = entry.arguments?.getString("name").orEmpty()
+            val name = java.net.URLDecoder.decode(encodedName, "UTF-8")
             val vm: IncidentHistoryViewModel = viewModel(factory = factory { IncidentHistoryViewModel(gateway, id) })
             IncidentHistoryScreen(
                 viewModel = vm,
+                monitorName = name,
                 onBack = { navController.popBackStack() },
             )
         }

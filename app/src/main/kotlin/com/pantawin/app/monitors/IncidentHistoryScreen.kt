@@ -43,6 +43,7 @@ import com.pantawin.app.data.MonitorGateway
 import com.pantawin.app.ui.EmptyState
 import com.pantawin.app.ui.ErrorState
 import com.pantawin.app.ui.LoadingState
+import com.pantawin.app.ui.ShareButton
 import com.pantawin.app.ui.theme.StatusDown
 import com.pantawin.app.ui.theme.StatusUp
 import com.pantawin.shared.model.Incident
@@ -93,6 +94,7 @@ class IncidentHistoryViewModel(
 @Composable
 fun IncidentHistoryScreen(
     viewModel: IncidentHistoryViewModel,
+    monitorName: String,
     onBack: () -> Unit,
 ) {
     val state by viewModel.state.collectAsState()
@@ -101,7 +103,13 @@ fun IncidentHistoryScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Incident history") },
+                title = {
+                    Text(
+                        if (monitorName.isBlank()) "Incident history" else "Incident history · $monitorName",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -140,7 +148,7 @@ fun IncidentHistoryScreen(
     }
 
     state.incidents.firstOrNull { it.id == selected }?.let { incident ->
-        IncidentDetailDialog(incident = incident, onDismiss = { selected = null })
+        IncidentDetailDialog(incident = incident, monitorName = monitorName, onDismiss = { selected = null })
     }
 }
 
@@ -178,11 +186,22 @@ fun IncidentRow(incident: Incident, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun IncidentDetailDialog(incident: Incident, onDismiss: () -> Unit) {
+fun IncidentDetailDialog(incident: Incident, monitorName: String, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
-        title = { Text(if (incident.ongoing) "Ongoing incident" else "Resolved incident") },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    if (incident.ongoing) "Ongoing incident" else "Resolved incident",
+                    modifier = Modifier.weight(1f),
+                )
+                ShareButton(
+                    subject = "Pantawin incident – $monitorName",
+                    body = incidentShareText(monitorName, incident),
+                )
+            }
+        },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 DialogLine("Cause", incident.cause)
@@ -195,6 +214,20 @@ fun IncidentDetailDialog(incident: Incident, onDismiss: () -> Unit) {
                 )
             }
         },
+    )
+}
+
+private fun incidentShareText(monitorName: String, incident: Incident): String = buildString {
+    appendLine("Pantawin incident report")
+    appendLine("Monitor: $monitorName")
+    appendLine("Cause: ${incident.cause}")
+    appendLine("Started: ${formatLocal(incident.startedAt)}")
+    appendLine("Resolved: ${incident.resolvedAt?.let { formatLocal(it) } ?: "not yet"}")
+    append(
+        "Duration: " + (
+            incident.durationS?.let { humanDuration(it) }
+                ?: (humanDuration(elapsedSince(incident.startedAt)) + " so far")
+        ),
     )
 }
 

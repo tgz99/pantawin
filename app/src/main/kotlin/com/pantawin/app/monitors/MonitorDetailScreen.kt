@@ -47,6 +47,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.pantawin.app.ui.ErrorState
 import com.pantawin.app.ui.LoadingState
+import com.pantawin.app.ui.ShareButton
 import com.pantawin.app.ui.theme.chartColors
 import com.pantawin.app.ui.theme.uptimeColor
 import com.pantawin.app.ui.visual
@@ -62,7 +63,7 @@ import kotlin.math.roundToInt
 fun MonitorDetailScreen(
     viewModel: MonitorDetailViewModel,
     onBack: () -> Unit,
-    onViewIncidents: () -> Unit,
+    onViewIncidents: (String) -> Unit,
 ) {
     val state by viewModel.state.collectAsState()
     var selectedIncident by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -80,6 +81,17 @@ fun MonitorDetailScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    val m = state.monitor
+                    val stats = state.stats
+                    if (m != null && stats != null) {
+                        val periodLabel = state.period.replaceFirstChar { it.uppercase() }
+                        ShareButton(
+                            subject = "Pantawin $periodLabel report – ${m.name}",
+                            body = reportShareText(m.name, periodLabel, stats),
+                        )
                     }
                 },
             )
@@ -177,7 +189,7 @@ fun MonitorDetailScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.weight(1f),
                                 )
-                                TextButton(onClick = onViewIncidents) { Text("View all") }
+                                TextButton(onClick = { onViewIncidents(state.monitor?.name.orEmpty()) }) { Text("View all") }
                             }
                             if (state.incidents.isEmpty()) {
                                 Text(
@@ -201,7 +213,11 @@ fun MonitorDetailScreen(
                 }
 
                 state.incidents.firstOrNull { it.id == selectedIncident }?.let { incident ->
-                    IncidentDetailDialog(incident = incident, onDismiss = { selectedIncident = null })
+                    IncidentDetailDialog(
+                        incident = incident,
+                        monitorName = state.monitor?.name.orEmpty(),
+                        onDismiss = { selectedIncident = null },
+                    )
                 }
             }
         }
@@ -273,6 +289,17 @@ private fun formatPct(pct: Double): String = when {
     pct >= 100.0 -> "100%"
     // Show enough precision that 99.98% doesn't render as 100%.
     else -> String.format("%.2f%%", pct)
+}
+
+private fun reportShareText(monitorName: String, periodLabel: String, stats: MonitorStats): String = buildString {
+    appendLine("Pantawin $periodLabel report")
+    appendLine("Monitor: $monitorName")
+    appendLine("Window: ${formatLocal(stats.from)} – ${formatLocal(stats.to)}")
+    appendLine("Uptime: ${stats.uptimePct?.let { formatPct(it) } ?: "–"}")
+    appendLine("Avg response: ${stats.avgMs?.let { "${it.roundToInt()} ms" } ?: "–"}")
+    appendLine("P95 response: ${stats.p95Ms?.let { "${it.roundToInt()} ms" } ?: "–"}")
+    appendLine("Checks: ${stats.checks} (${stats.fails} failed)")
+    append("Downtime: ${humanDowntime(stats.downtimeS)}")
 }
 
 private fun humanDowntime(seconds: Int): String = when {
