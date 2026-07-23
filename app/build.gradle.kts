@@ -45,8 +45,8 @@ android {
         applicationId = "com.pantawin.app"
         minSdk = 30
         targetSdk = 37
-        versionCode = 8
-        versionName = "1.4.2" // Alert reliability: Do Not Disturb bypass fix-it banner
+        versionCode = 9
+        versionName = "1.5.0" // WhatsApp/email share for incidents and monitor reports
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
