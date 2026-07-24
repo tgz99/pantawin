@@ -45,8 +45,8 @@ android {
         applicationId = "com.pantawin.app"
         minSdk = 30
         targetSdk = 37
-        versionCode = 9
-        versionName = "1.5.0" // WhatsApp/email share for incidents and monitor reports
+        versionCode = 10
+        versionName = "1.5.1" // Fix: DOWN alerts no longer force-open the app
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

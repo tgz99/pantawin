@@ -120,43 +120,6 @@ fun rememberBatteryOptimizationState(): BatteryOptimizationState {
 data class BatteryOptimizationState(val ignoring: Boolean)
 
 /**
- * Android 14+ requires the user to separately grant full-screen-intent use
- * (Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT) — without it, DOWN
- * alerts fall back to a plain heads-up instead of waking/locking over the
- * screen. Pre-14 this permission is granted automatically at install.
- */
-fun canUseFullScreenIntent(context: Context): Boolean {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return true
-    val mgr = context.getSystemService(NotificationManager::class.java) ?: return false
-    return mgr.canUseFullScreenIntent()
-}
-
-fun fullScreenIntentSettingsIntent(context: Context): Intent =
-    Intent(
-        Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
-        Uri.parse("package:${context.packageName}"),
-    )
-
-@Composable
-fun rememberFullScreenIntentState(): FullScreenIntentState {
-    val context = LocalContext.current
-    var allowed by remember { mutableStateOf(canUseFullScreenIntent(context)) }
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                allowed = canUseFullScreenIntent(context)
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-    return FullScreenIntentState(allowed)
-}
-
-data class FullScreenIntentState(val allowed: Boolean)
-
-/**
  * The DOWN channel declares setBypassDnd(true) (see Notifications.kt), but
  * Android only honors that once the user separately grants "Do Not Disturb
  * access" — a sensitive, app-level permission with no runtime dialog (unlike

@@ -41,10 +41,8 @@ import com.pantawin.app.monitors.MonitorsScreen
 import com.pantawin.app.monitors.MonitorsViewModel
 import com.pantawin.app.push.batteryOptimizationExemptionIntent
 import com.pantawin.app.push.dndAccessSettingsIntent
-import com.pantawin.app.push.fullScreenIntentSettingsIntent
 import com.pantawin.app.push.rememberBatteryOptimizationState
 import com.pantawin.app.push.rememberDndAccessState
-import com.pantawin.app.push.rememberFullScreenIntentState
 import com.pantawin.app.push.rememberNotificationPermissionState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.emitAll
@@ -101,21 +99,18 @@ fun PantawinNavHost(session: SessionManager) {
     val pushDegraded = if (app.pushEnabled) !rememberNotificationPermissionState().granted else false
 
     // Even with the permission granted, several OEMs still silently drop
-    // background FCM delivery under battery optimization, (Android 14+)
-    // require a separate full-screen-intent grant for the DOWN alert to wake
-    // the screen, or (Do Not Disturb) ignore the channel's bypassDnd flag
-    // unless DND access is separately granted. Surface a fix-it banner
-    // rather than leaving alerts unexplainably flaky.
+    // background FCM delivery under battery optimization, or (Do Not
+    // Disturb) ignore the channel's bypassDnd flag unless DND access is
+    // separately granted. Surface a fix-it banner rather than leaving
+    // alerts unexplainably flaky.
     val batteryExempt = rememberBatteryOptimizationState().ignoring
-    val fullScreenAllowed = rememberFullScreenIntentState().allowed
     val dndAccessGranted = rememberDndAccessState().granted
     val showReliabilityBanner = app.pushEnabled && !pushDegraded &&
-        (!batteryExempt || !fullScreenAllowed || !dndAccessGranted)
+        (!batteryExempt || !dndAccessGranted)
     val onFixReliability: () -> Unit = {
         context.startActivity(
             when {
                 !batteryExempt -> batteryOptimizationExemptionIntent(context)
-                !fullScreenAllowed -> fullScreenIntentSettingsIntent(context)
                 else -> dndAccessSettingsIntent()
             },
         )
