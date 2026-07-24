@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
 import android.net.Uri
-import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -19,37 +18,52 @@ import com.pantawin.app.R
  * vector (ic_stat_alert) — a colored icon renders as a blank square.
  */
 object Notifications {
-    // v2: alarm-grade sound. Channel settings are immutable after creation,
-    // so upgrading the sound required a new channel id; the legacy id is
-    // deleted so it doesn't linger in the system notification settings.
-    const val CHANNEL_DOWN = "downtime_alerts_v2"
-    private const val LEGACY_CHANNEL_DOWN = "downtime_alerts"
-    const val CHANNEL_RECOVERY = "recovery"
+    // v3: custom alarm-grade WAV (was the system alarm tone in v2). Channel
+    // settings are immutable after creation, so upgrading the sound requires
+    // a new channel id each time; legacy ids are deleted so they don't linger
+    // in the system notification settings.
+    const val CHANNEL_DOWN = "downtime_alerts_v3"
+    private const val LEGACY_CHANNEL_DOWN_V1 = "downtime_alerts"
+    private const val LEGACY_CHANNEL_DOWN_V2 = "downtime_alerts_v2"
+    const val CHANNEL_RECOVERY = "recovery_v2"
+    private const val LEGACY_CHANNEL_RECOVERY_V1 = "recovery"
 
     fun ensureChannels(context: Context) {
         val mgr = context.getSystemService(NotificationManager::class.java)
-        mgr.deleteNotificationChannel(LEGACY_CHANNEL_DOWN)
-        // The device's alarm tone played on the ALARM stream: loud, insistent,
-        // and (unlike the notification stream) usually audible even when the
-        // ringer is quiet — downtime must not be missable.
+        mgr.deleteNotificationChannel(LEGACY_CHANNEL_DOWN_V1)
+        mgr.deleteNotificationChannel(LEGACY_CHANNEL_DOWN_V2)
+        mgr.deleteNotificationChannel(LEGACY_CHANNEL_RECOVERY_V1)
+        // Played on the ALARM stream: loud, insistent, and (unlike the
+        // notification stream) still audible in Vibrate/Silent ringer modes —
+        // downtime must not be missable.
         val alarmAttributes = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_ALARM)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build()
+        val downSound = Uri.parse("android.resource://${context.packageName}/${R.raw.down}")
         mgr.createNotificationChannel(
             NotificationChannel(CHANNEL_DOWN, "Downtime Alerts", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "Critical alarm when a monitor goes down"
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 400, 200, 400, 200, 600)
-                setSound(Settings.System.DEFAULT_ALARM_ALERT_URI, alarmAttributes)
+                setSound(downSound, alarmAttributes)
                 // Honored only if the user grants Do-Not-Disturb access to the
                 // app in system settings; a harmless no-op otherwise.
                 setBypassDnd(true)
             },
         )
+        // Played on the NOTIFICATION stream (default), so it follows Ringer
+        // volume and stays silent under Vibrate/Silent/DND — recovery is
+        // lower severity and doesn't need to bypass either.
+        val notificationAttributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        val upSound = Uri.parse("android.resource://${context.packageName}/${R.raw.up}")
         mgr.createNotificationChannel(
             NotificationChannel(CHANNEL_RECOVERY, "Recovery", NotificationManager.IMPORTANCE_DEFAULT).apply {
                 description = "Notifications when a monitor recovers"
+                setSound(upSound, notificationAttributes)
             },
         )
     }

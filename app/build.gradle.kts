@@ -45,8 +45,8 @@ android {
         applicationId = "com.pantawin.app"
         minSdk = 30
         targetSdk = 37
-        versionCode = 10
-        versionName = "1.5.1" // Fix: DOWN alerts no longer force-open the app
+        versionCode = 11
+        versionName = "1.5.2" // Custom DOWN/RECOVERY notification sounds
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
